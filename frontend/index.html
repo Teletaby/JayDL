@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JayDL - Ultimate Media Downloader</title>
+    <meta name="description" content="Download videos and music from YouTube, Spotify, TikTok and more in 4K quality">
+    <link rel="stylesheet" href="style.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="logo">
+                <i class="fas fa-download"></i>
+                <h1>JayDL</h1>
+            </div>
+            <p class="tagline">Download videos & music in 4K quality</p>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- URL Input Section -->
+            <section class="input-section">
+                <div class="url-input-container">
+                    <input 
+                        type="url" 
+                        id="urlInput" 
+                        placeholder="Paste YouTube, Spotify, TikTok, Instagram, Twitter, etc. URL here..."
+                        class="url-input"
+                    >
+                    <button id="pasteBtn" class="paste-btn" title="Paste from clipboard">
+                        <i class="fas fa-paste"></i>
+                    </button>
+                </div>
+                <button id="analyzeBtn" class="analyze-btn">
+                    <i class="fas fa-search"></i>
+                    Analyze URL
+                </button>
+            </section>
+
+            <!-- Media Info Section -->
+            <section id="mediaInfo" class="media-info hidden">
+                <div class="media-preview">
+                    <img id="mediaThumbnail" src="" alt="Media thumbnail" class="thumbnail">
+                    <div class="media-details">
+                        <h3 id="mediaTitle">Media Title</h3>
+                        <div class="media-meta">
+                            <span id="mediaDuration"><i class="fas fa-clock"></i> Duration</span>
+                            <span id="mediaUploader"><i class="fas fa-user"></i> Uploader</span>
+                            <span id="mediaPlatform"><i class="fas fa-globe"></i> Platform</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Download Options -->
+                <div class="download-options">
+                    <div class="option-group">
+                        <label>Media Type:</label>
+                        <div class="btn-group">
+                            <button class="option-btn active" data-type="video">
+                                <i class="fas fa-video"></i> Video
+                            </button>
+                            <button class="option-btn" data-type="audio">
+                                <i class="fas fa-music"></i> Audio
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="option-group">
+                        <label>Quality:</label>
+                        <div class="btn-group" id="qualityOptions">
+                            <!-- Quality options will be populated dynamically -->
+                        </div>
+                    </div>
+
+                    <button id="downloadBtn" class="download-btn">
+                        <i class="fas fa-download"></i>
+                        Start Download
+                    </button>
+                </div>
+            </section>
+
+            <!-- Supported Platforms -->
+            <section class="platforms-section">
+                <h3>Supported Platforms</h3>
+                <div class="platforms-grid" id="platformsGrid">
+                    <!-- Platforms will be populated dynamically -->
+                </div>
+            </section>
+
+            <!-- Download History -->
+            <section class="history-section">
+                <h3>Recent Downloads</h3>
+                <div class="history-list" id="historyList">
+                    <!-- Download history will be populated here -->
+                </div>
+            </section>
+        </main>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>&copy; 2024 JayDL. For personal use only.</p>
+            <p class="disclaimer">Respect copyright laws and terms of service.</p>
+        </footer>
+    </div>
+
+    <!-- Loading Modal -->
+    <div id="loadingModal" class="modal hidden">
+        <div class="modal-content">
+            <div class="loader"></div>
+            <h3>Processing your request...</h3>
+            <p id="loadingMessage">Please wait while we process your download</p>
+        </div>
+    </div>
+
+    <!-- Result Modal -->
+    <div id="resultModal" class="modal hidden">
+        <div class="modal-content">
+            <div id="resultIcon" class="result-icon"></div>
+            <h3 id="resultTitle">Download Complete</h3>
+            <p id="resultMessage">Your file has been downloaded successfully</p>
+            <button id="resultAction" class="download-btn">Download File</button>
+            <button id="closeModal" class="close-btn">Close</button>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

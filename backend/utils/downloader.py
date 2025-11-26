@@ -41,7 +41,37 @@ class JayDLDownloader:
         """Get available formats and info for a video"""
         ydl_opts = {
             'quiet': True,
-            'no_warnings': True,
+            'no_warnings': False,
+            'extract_flat': False,
+            
+            # Advanced anti-bot settings
+            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'referer': 'https://www.youtube.com/',
+            
+            # Retry settings
+            'retries': 15,
+            'fragment_retries': 15,
+            'skip_unavailable_fragments': True,
+            'ignoreerrors': True,
+            'no_check_certificate': True,
+            
+            # YouTube specific settings
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android', 'web'],
+                    'player_skip': ['configs', 'webpage', 'js']
+                }
+            },
+            
+            # HTTP headers
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Cache-Control': 'no-cache',
+                'Connection': 'keep-alive',
+            }
         }
         
         try:
@@ -120,8 +150,52 @@ class JayDLDownloader:
     
     def get_ytdlp_options(self, url: str, quality: str, media_type: str, platform: str):
         """Get optimized yt-dlp options for each platform"""
+        # Base options for all platforms
+        base_opts = {
+            'quiet': False,
+            'no_warnings': False,
+            
+            # Enhanced anti-bot settings
+            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'referer': 'https://www.youtube.com/',
+            
+            # Retry and error handling
+            'retries': 20,
+            'fragment_retries': 20,
+            'skip_unavailable_fragments': True,
+            'ignoreerrors': True,
+            'no_check_certificate': True,
+            
+            # YouTube specific optimizations
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android', 'web'],
+                    'player_skip': ['configs', 'webpage', 'js'],
+                    'throttled_rate': '100K'
+                }
+            },
+            
+            # HTTP settings
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Cache-Control': 'no-cache',
+                'Connection': 'keep-alive',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'none',
+                'Upgrade-Insecure-Requests': '1',
+            },
+            
+            # Rate limiting to avoid detection
+            'ratelimit': 1048576,  # 1 MB/s
+            'throttledratelimit': 524288,  # 512 KB/s
+        }
+        
         if media_type == 'audio':
-            return {
+            base_opts.update({
                 'outtmpl': os.path.join(self.base_dir, 'music', '%(title)s.%(ext)s'),
                 'format': 'bestaudio/best',
                 'postprocessors': [{
@@ -129,17 +203,14 @@ class JayDLDownloader:
                     'preferredcodec': 'mp3',
                     'preferredquality': '320',
                 }],
-            }
+            })
         else:
             # Platform-specific format handling
             if platform == 'tiktok':
-                # TikTok has limited formats - use whatever is available
                 format_spec = 'best'
             elif platform == 'instagram':
-                # Instagram often has limited formats
                 format_spec = 'best'
             else:
-                # YouTube and other platforms support quality selection
                 quality_map = {
                     '4k': 'bestvideo[height<=2160]+bestaudio/best[height<=2160]',
                     '1440p': 'bestvideo[height<=1440]+bestaudio/best[height<=1440]',
@@ -150,26 +221,30 @@ class JayDLDownloader:
                 }
                 format_spec = quality_map.get(quality, 'best')
             
-            ydl_opts = {
+            base_opts.update({
                 'outtmpl': os.path.join(self.base_dir, 'videos', '%(title)s.%(ext)s'),
                 'format': format_spec,
                 'merge_output_format': 'mp4',
-            }
+            })
             
-            # Platform-specific headers and options
+            # Platform-specific headers
             if platform == 'tiktok':
-                ydl_opts['http_headers'] = {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                base_opts['http_headers'].update({
                     'Referer': 'https://www.tiktok.com/',
                     'Origin': 'https://www.tiktok.com',
-                }
+                })
             elif platform == 'instagram':
-                ydl_opts['http_headers'] = {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                base_opts['http_headers'].update({
                     'Referer': 'https://www.instagram.com/',
-                }
-            
-            return ydl_opts
+                    'Origin': 'https://www.instagram.com',
+                })
+            elif platform == 'twitter':
+                base_opts['http_headers'].update({
+                    'Referer': 'https://twitter.com/',
+                    'Origin': 'https://twitter.com',
+                })
+        
+        return base_opts
     
     def download_with_ytdlp(self, url: str, quality: str, media_type: str, platform: str) -> Dict[str, Any]:
         """Download using yt-dlp for various platforms"""
@@ -178,6 +253,7 @@ class JayDLDownloader:
             
             print(f"Downloading: {url}")
             print(f"Platform: {platform}, Quality: {quality}, Type: {media_type}")
+            print(f"Using enhanced anti-bot configuration...")
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=True)
@@ -203,9 +279,11 @@ class JayDLDownloader:
         except Exception as e:
             print(f"Download failed: {e}")
             
-            # Provide more helpful error messages
+            # Enhanced error handling with specific suggestions
             error_msg = str(e)
-            if 'format is not available' in error_msg:
+            if 'Sign in to confirm' in error_msg or 'bot' in error_msg.lower():
+                error_msg += ". YouTube is blocking automated downloads. Try: 1) Using a different video, 2) Waiting a few hours, 3) Using the 'Best Available' quality."
+            elif 'format is not available' in error_msg:
                 error_msg += ". Try selecting a different quality or use 'Best Available'."
             elif 'sigi state' in error_msg:
                 error_msg += ". TikTok extraction issue - try again later or use a different URL."
@@ -213,6 +291,8 @@ class JayDLDownloader:
                 error_msg += ". This video is private and cannot be downloaded."
             elif 'Video unavailable' in error_msg:
                 error_msg += ". This video is not available."
+            elif 'HTTP Error 429' in error_msg:
+                error_msg += ". Too many requests - please wait before trying again."
             
             return {'success': False, 'error': error_msg}
     

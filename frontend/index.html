@@ -271,6 +271,15 @@
             color: #3c3;
             border: 1px solid #cfc;
         }
+
+        .quality-badge {
+            font-size: 0.8em;
+            background: #667eea;
+            color: white;
+            padding: 2px 6px;
+            border-radius: 4px;
+            margin-left: 5px;
+        }
     </style>
 </head>
 <body>
@@ -293,6 +302,7 @@
                 </div>
 
                 <div id="errorAlert" class="alert alert-error hidden"></div>
+                <div id="successAlert" class="alert alert-success hidden"></div>
 
                 <div class="media-type-section">
                     <h3>Download Type</h3>
@@ -346,7 +356,7 @@
     </div>
 
     <script>
-        const API_BASE = '';
+        const API_BASE = ''; // Keep empty for same-origin, or use your backend URL
         let currentMediaInfo = null;
         let selectedQuality = 'best';
         let selectedMediaType = 'video';
@@ -375,6 +385,7 @@
             try {
                 const text = await navigator.clipboard.readText();
                 document.getElementById('urlInput').value = text;
+                showSuccess('URL pasted from clipboard!');
             } catch (err) {
                 showError('Failed to paste from clipboard');
             }
@@ -384,6 +395,11 @@
             document.querySelectorAll('.option-btn[data-type]').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
             selectedMediaType = btn.dataset.type;
+            
+            // Auto-select appropriate quality when switching type
+            if (selectedMediaType === 'audio') {
+                selectFirstAudioQuality();
+            }
         }
 
         async function analyzeMedia() {
@@ -394,8 +410,15 @@
                 return;
             }
 
+            // Basic URL validation
+            if (!isValidUrl(url)) {
+                showError('Please enter a valid URL');
+                return;
+            }
+
             showLoading('Analyzing media...');
             hideError();
+            hideSuccess();
 
             try {
                 const response = await fetch(`${API_BASE}/api/analyze`, {
@@ -409,38 +432,59 @@
 
                 if (data.success) {
                     displayMediaInfo(data);
+                    showSuccess('Media analyzed successfully!');
                 } else {
                     showError(data.error || 'Failed to analyze media');
                 }
             } catch (err) {
                 hideLoading();
-                showError('Network error. Please try again.');
+                showError('Network error. Please check your connection and try again.');
             }
         }
 
         function displayMediaInfo(data) {
             currentMediaInfo = data;
             
+            // Set media information
             document.getElementById('mediaThumbnail').src = data.thumbnail || 'https://via.placeholder.com/200x150?text=No+Image';
-            document.getElementById('mediaTitle').textContent = data.title;
-            document.getElementById('mediaDuration').innerHTML = `<i class="fas fa-clock"></i> ${data.duration}`;
-            document.getElementById('mediaUploader').innerHTML = `<i class="fas fa-user"></i> ${data.uploader}`;
-            document.getElementById('mediaPlatform').innerHTML = `<i class="fas fa-globe"></i> ${data.platform}`;
+            document.getElementById('mediaTitle').textContent = data.title || 'Unknown Title';
+            document.getElementById('mediaDuration').innerHTML = `<i class="fas fa-clock"></i> ${data.duration || 'Unknown'}`;
+            document.getElementById('mediaUploader').innerHTML = `<i class="fas fa-user"></i> ${data.uploader || 'Unknown'}`;
+            document.getElementById('mediaPlatform').innerHTML = `<i class="fas fa-globe"></i> ${data.platform || 'Unknown'}`;
 
+            // Display quality options
             const qualityOptions = document.getElementById('qualityOptions');
             qualityOptions.innerHTML = '';
             
-            data.formats.forEach(format => {
-                const btn = document.createElement('button');
-                btn.className = 'option-btn';
-                btn.textContent = format.resolution;
-                btn.onclick = () => selectQuality(btn, format.format_id);
-                qualityOptions.appendChild(btn);
-            });
+            if (data.formats && data.formats.length > 0) {
+                data.formats.forEach(format => {
+                    const btn = document.createElement('button');
+                    btn.className = 'option-btn';
+                    
+                    // Handle different format structures from RapidAPI
+                    const resolution = format.resolution || format.format || 'Unknown';
+                    const formatId = format.format_id || format.type || resolution.toLowerCase();
+                    
+                    btn.innerHTML = `${resolution}`;
+                    if (format.type === 'audio') {
+                        btn.innerHTML += `<span class="quality-badge">AUDIO</span>`;
+                    }
+                    
+                    btn.onclick = () => selectQuality(btn, formatId);
+                    qualityOptions.appendChild(btn);
+                });
 
-            if (data.formats.length > 0) {
+                // Auto-select first option
                 qualityOptions.firstChild.classList.add('active');
-                selectedQuality = data.formats[0].format_id;
+                selectedQuality = data.formats[0].format_id || data.formats[0].type || 'best';
+            } else {
+                // No formats available, create a default option
+                const btn = document.createElement('button');
+                btn.className = 'option-btn active';
+                btn.textContent = 'Best Quality';
+                btn.onclick = () => selectQuality(btn, 'best');
+                qualityOptions.appendChild(btn);
+                selectedQuality = 'best';
             }
 
             document.getElementById('mediaInfo').classList.remove('hidden');
@@ -453,10 +497,26 @@
             selectedQuality = quality;
         }
 
+        function selectFirstAudioQuality() {
+            const audioBtn = document.querySelector('#qualityOptions .option-btn:has(.quality-badge)');
+            if (audioBtn) {
+                document.querySelectorAll('#qualityOptions .option-btn').forEach(b => b.classList.remove('active'));
+                audioBtn.classList.add('active');
+                selectedQuality = 'audio';
+            }
+        }
+
         async function downloadMedia() {
+            if (!currentMediaInfo) {
+                showError('Please analyze a URL first');
+                return;
+            }
+
             const url = document.getElementById('urlInput').value.trim();
             
-            showLoading('Downloading...');
+            showLoading('Preparing download...');
+            hideError();
+            hideSuccess();
 
             try {
                 const response = await fetch(`${API_BASE}/api/download`, {
@@ -473,14 +533,19 @@
                 hideLoading();
 
                 if (data.success) {
-                    window.location.href = `${API_BASE}${data.download_url}`;
-                    showError('Download started! Check your downloads folder.', 'success');
+                    // Trigger download
+                    if (data.download_url) {
+                        window.location.href = `${API_BASE}${data.download_url}`;
+                        showSuccess('Download started! Check your downloads folder.');
+                    } else {
+                        showSuccess('Download prepared successfully!');
+                    }
                 } else {
-                    showError(data.error || 'Download failed');
+                    showError(data.error || 'Download failed. Please try again.');
                 }
             } catch (err) {
                 hideLoading();
-                showError('Network error. Please try again.');
+                showError('Network error. Please check your connection and try again.');
             }
         }
 
@@ -503,6 +568,15 @@
             }
         }
 
+        function isValidUrl(string) {
+            try {
+                new URL(string);
+                return true;
+            } catch (_) {
+                return false;
+            }
+        }
+
         function showLoading(message) {
             document.getElementById('loadingMessage').textContent = message;
             document.getElementById('loadingModal').classList.remove('hidden');
@@ -512,16 +586,26 @@
             document.getElementById('loadingModal').classList.add('hidden');
         }
 
-        function showError(message, type = 'error') {
+        function showError(message) {
             const alert = document.getElementById('errorAlert');
             alert.textContent = message;
-            alert.className = `alert alert-${type}`;
             alert.classList.remove('hidden');
             setTimeout(() => hideError(), 5000);
         }
 
         function hideError() {
             document.getElementById('errorAlert').classList.add('hidden');
+        }
+
+        function showSuccess(message) {
+            const alert = document.getElementById('successAlert');
+            alert.textContent = message;
+            alert.classList.remove('hidden');
+            setTimeout(() => hideSuccess(), 5000);
+        }
+
+        function hideSuccess() {
+            document.getElementById('successAlert').classList.add('hidden');
         }
     </script>
 </body>

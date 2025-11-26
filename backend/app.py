@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_file, render_template
+from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from utils.downloader import JayDLDownloader
 import os
@@ -18,8 +18,19 @@ downloader = JayDLDownloader(base_dir=DOWNLOAD_DIR)
 
 @app.route('/')
 def index():
-    """Serve the main HTML page"""
-    return render_template('index.html')
+    """API status page"""
+    return jsonify({
+        'success': True,
+        'message': 'JayDL Backend API is running',
+        'version': '1.0',
+        'timestamp': datetime.now().isoformat(),
+        'endpoints': {
+            'analyze': '/api/analyze (POST)',
+            'download': '/api/download (POST)',
+            'platforms': '/api/platforms (GET)',
+            'health': '/api/health (GET)'
+        }
+    })
 
 @app.route('/api/analyze', methods=['POST'])
 def analyze_media():

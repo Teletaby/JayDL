@@ -3,6 +3,8 @@ import os
 import subprocess
 import logging
 import requests
+import random
+import time
 from typing import Dict, Any
 
 logging.basicConfig(level=logging.INFO)
@@ -21,7 +23,19 @@ class JayDLDownloader:
             'https://inv.tux.pizza',
             'https://invidious.nerdvpn.de',
             'https://yt.artemislena.eu',
-            'https://invidious.lidarshield.cloud'
+            'https://invidious.lidarshield.cloud',
+            'https://yewtu.be',
+            'https://invidious.privacydev.net',
+            'https://inv.nadeko.net'
+        ]
+        
+        # Rotating user agents to appear more like real browsers
+        self.user_agents = [
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15'
         ]
     
     def setup_directories(self):
@@ -68,13 +82,21 @@ class JayDLDownloader:
         if not video_id:
             return {'success': False, 'error': 'Could not extract YouTube video ID'}
         
+        # Shuffle instances for load balancing
+        instances = self.invidious_instances.copy()
+        random.shuffle(instances)
+        
         # Try different Invidious instances
-        for instance in self.invidious_instances:
+        for instance in instances:
             try:
                 api_url = f"{instance}/api/v1/videos/{video_id}"
                 print(f"Trying Invidious instance: {instance}")
                 
-                response = requests.get(api_url, timeout=10)
+                headers = {
+                    'User-Agent': random.choice(self.user_agents)
+                }
+                
+                response = requests.get(api_url, headers=headers, timeout=10)
                 if response.status_code == 200:
                     data = response.json()
                     
@@ -109,9 +131,133 @@ class JayDLDownloader:
         
         return {'success': False, 'error': 'All Invidious instances failed'}
     
+    def download_via_invidious(self, url: str, quality: str = 'best', media_type: str = 'video') -> Dict[str, Any]:
+        """Download video directly from Invidious"""
+        video_id = self.extract_youtube_id(url)
+        if not video_id:
+            return {'success': False, 'error': 'Could not extract YouTube video ID'}
+        
+        # Shuffle instances
+        instances = self.invidious_instances.copy()
+        random.shuffle(instances)
+        
+        for instance in instances:
+            try:
+                api_url = f"{instance}/api/v1/videos/{video_id}"
+                print(f"Trying to download via Invidious: {instance}")
+                
+                headers = {
+                    'User-Agent': random.choice(self.user_agents)
+                }
+                
+                response = requests.get(api_url, headers=headers, timeout=10)
+                if response.status_code == 200:
+                    data = response.json()
+                    
+                    # Get the appropriate stream
+                    if media_type == 'audio':
+                        streams = data.get('adaptiveFormats', [])
+                        audio_stream = None
+                        for stream in streams:
+                            if stream.get('type', '').startswith('audio'):
+                                audio_stream = stream
+                                break
+                        
+                        if not audio_stream:
+                            continue
+                        
+                        download_url = audio_stream.get('url')
+                    else:
+                        # Get video stream
+                        streams = data.get('formatStreams', [])
+                        if not streams:
+                            continue
+                        
+                        # Find best matching quality
+                        quality_map = {
+                            '4k': 2160,
+                            '1440p': 1440,
+                            '1080p': 1080,
+                            '720p': 720,
+                            '480p': 480,
+                            'best': 9999
+                        }
+                        target_height = quality_map.get(quality, 9999)
+                        
+                        best_stream = None
+                        for stream in streams:
+                            stream_quality = stream.get('quality', '')
+                            stream_height = self.parse_resolution(stream_quality)
+                            
+                            if stream_height <= target_height:
+                                if not best_stream or stream_height > self.parse_resolution(best_stream.get('quality', '')):
+                                    best_stream = stream
+                        
+                        if not best_stream:
+                            best_stream = streams[0]  # Fallback to first available
+                        
+                        download_url = best_stream.get('url')
+                    
+                    if not download_url:
+                        continue
+                    
+                    # Download the file
+                    title = data.get('title', 'video').replace('/', '_').replace('\\', '_')
+                    ext = 'mp4' if media_type == 'video' else 'webm'
+                    folder = 'videos' if media_type == 'video' else 'music'
+                    filename = f"{title}.{ext}"
+                    filepath = os.path.join(self.base_dir, folder, filename)
+                    
+                    print(f"Downloading: {title}")
+                    file_response = requests.get(download_url, headers=headers, stream=True, timeout=60)
+                    
+                    if file_response.status_code == 200:
+                        with open(filepath, 'wb') as f:
+                            for chunk in file_response.iter_content(chunk_size=8192):
+                                f.write(chunk)
+                        
+                        # Convert audio to mp3 if needed
+                        if media_type == 'audio':
+                            mp3_filepath = filepath.rsplit('.', 1)[0] + '.mp3'
+                            try:
+                                subprocess.run([
+                                    'ffmpeg', '-i', filepath, '-codec:a', 'libmp3lame',
+                                    '-qscale:a', '2', mp3_filepath, '-y'
+                                ], check=True, capture_output=True)
+                                os.remove(filepath)
+                                filepath = mp3_filepath
+                                filename = os.path.basename(mp3_filepath)
+                            except:
+                                print("FFmpeg conversion failed, keeping original format")
+                        
+                        file_size = self.format_file_size(os.path.getsize(filepath))
+                        print(f"Download completed: {filename} ({file_size})")
+                        
+                        return {
+                            'success': True,
+                            'filename': filename,
+                            'title': title,
+                            'duration': self.format_duration(data.get('lengthSeconds', 0)),
+                            'filepath': filepath,
+                            'platform': 'youtube',
+                            'media_type': media_type,
+                            'file_size': file_size,
+                            'method': 'invidious'
+                        }
+                    
+            except Exception as e:
+                print(f"Invidious download failed on {instance}: {e}")
+                continue
+        
+        return {'success': False, 'error': 'All Invidious instances failed to download'}
+    
     def parse_resolution(self, quality: str) -> int:
         """Parse resolution from quality string"""
-        if '1080' in quality:
+        if '2160' in quality or '4K' in quality:
+            return 2160
+        elif '1440' in quality:
+            return 1440
+        elif '1080' in quality:
             return 1080
         elif '720' in quality:
             return 720
@@ -119,6 +265,8 @@ class JayDLDownloader:
             return 480
         elif '360' in quality:
             return 360
+        elif '240' in quality:
+            return 240
         return 0
     
     def get_video_info(self, url: str) -> Dict[str, Any]:
@@ -139,6 +287,7 @@ class JayDLDownloader:
             'quiet': True,
             'no_warnings': False,
             'extract_flat': False,
+            'user_agent': random.choice(self.user_agents),
         }
         
         try:
@@ -202,12 +351,44 @@ class JayDLDownloader:
             return f"{minutes:02d}:{secs:02d}"
     
     def download_media(self, url: str, quality: str = 'best', media_type: str = 'video') -> Dict[str, Any]:
-        """Download media from various platforms"""
+        """Download media from various platforms with multiple fallback strategies"""
         platform = self.detect_platform(url)
         
         try:
             if platform == 'spotify':
                 return self.download_spotify(url)
+            elif platform == 'youtube':
+                # For YouTube, try multiple methods in order
+                print("Attempting YouTube download with fallback strategies...")
+                
+                # Strategy 1: Try Invidious direct download
+                print("\n[Strategy 1] Trying Invidious direct download...")
+                result = self.download_via_invidious(url, quality, media_type)
+                if result['success']:
+                    return result
+                print("Invidious download failed, trying next strategy...")
+                
+                # Small delay between attempts
+                time.sleep(1)
+                
+                # Strategy 2: Try yt-dlp with enhanced options
+                print("\n[Strategy 2] Trying yt-dlp with anti-bot measures...")
+                result = self.download_with_ytdlp_enhanced(url, quality, media_type, platform)
+                if result['success']:
+                    return result
+                print("yt-dlp enhanced failed, trying next strategy...")
+                
+                # Strategy 3: Try yt-dlp with basic options
+                print("\n[Strategy 3] Trying yt-dlp basic mode...")
+                result = self.download_with_ytdlp(url, quality, media_type, platform)
+                if result['success']:
+                    return result
+                
+                # All strategies failed
+                return {
+                    'success': False,
+                    'error': 'All download strategies failed. YouTube may be blocking automated downloads. Try again later or use a different video.'
+                }
             else:
                 return self.download_with_ytdlp(url, quality, media_type, platform)
                 
@@ -226,6 +407,7 @@ class JayDLDownloader:
                     'preferredcodec': 'mp3',
                     'preferredquality': '320',
                 }],
+                'user_agent': random.choice(self.user_agents),
             }
         else:
             if platform in ['tiktok', 'instagram']:
@@ -245,10 +427,63 @@ class JayDLDownloader:
                 'outtmpl': os.path.join(self.base_dir, 'videos', '%(title)s.%(ext)s'),
                 'format': format_spec,
                 'merge_output_format': 'mp4',
+                'user_agent': random.choice(self.user_agents),
             }
     
+    def download_with_ytdlp_enhanced(self, url: str, quality: str, media_type: str, platform: str) -> Dict[str, Any]:
+        """Download using yt-dlp with enhanced anti-bot options"""
+        try:
+            ydl_opts = self.get_ytdlp_options(url, quality, media_type, platform)
+            
+            # Add enhanced anti-bot options
+            ydl_opts.update({
+                'extractor_args': {
+                    'youtube': {
+                        'player_client': ['android', 'web'],
+                        'player_skip': ['webpage', 'configs'],
+                    }
+                },
+                'sleep_interval': 1,
+                'max_sleep_interval': 3,
+                'http_headers': {
+                    'User-Agent': random.choice(self.user_agents),
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language': 'en-us,en;q=0.5',
+                    'Sec-Fetch-Mode': 'navigate',
+                }
+            })
+            
+            print(f"Downloading with enhanced options: {url}")
+            print(f"Platform: {platform}, Quality: {quality}, Type: {media_type}")
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                filename = ydl.prepare_filename(info)
+                
+                if media_type == 'audio':
+                    filename = filename.rsplit('.', 1)[0] + '.mp3'
+                
+                file_size = self.format_file_size(os.path.getsize(filename)) if os.path.exists(filename) else 'Unknown'
+                print(f"Download completed: {filename} ({file_size})")
+                
+                return {
+                    'success': True,
+                    'filename': os.path.basename(filename),
+                    'title': info.get('title', 'Unknown'),
+                    'duration': self.format_duration(info.get('duration', 0)),
+                    'filepath': filename,
+                    'platform': platform,
+                    'media_type': media_type,
+                    'file_size': file_size,
+                    'method': 'yt-dlp-enhanced'
+                }
+                
+        except Exception as e:
+            print(f"Enhanced download failed: {e}")
+            return {'success': False, 'error': str(e)}
+    
     def download_with_ytdlp(self, url: str, quality: str, media_type: str, platform: str) -> Dict[str, Any]:
-        """Download using yt-dlp"""
+        """Download using yt-dlp basic mode"""
         try:
             ydl_opts = self.get_ytdlp_options(url, quality, media_type, platform)
             
@@ -273,7 +508,8 @@ class JayDLDownloader:
                     'filepath': filename,
                     'platform': platform,
                     'media_type': media_type,
-                    'file_size': file_size
+                    'file_size': file_size,
+                    'method': 'yt-dlp-basic'
                 }
                 
         except Exception as e:
@@ -281,9 +517,9 @@ class JayDLDownloader:
             
             error_msg = str(e)
             if 'Sign in to confirm' in error_msg or 'bot' in error_msg.lower():
-                error_msg += ". YouTube is blocking automated downloads. Try using a different video or platform."
+                error_msg = "YouTube is blocking automated downloads. All fallback methods failed."
             elif 'format is not available' in error_msg:
-                error_msg += ". Try selecting a different quality."
+                error_msg += " Try selecting a different quality."
             
             return {'success': False, 'error': error_msg}
     
@@ -325,4 +561,4 @@ class JayDLDownloader:
                 
         except Exception as e:
             print(f"Spotify download error: {e}")
-            return {'success': False, 'error': str(e)}
+            return {'success': False, 'error': str(e)}  

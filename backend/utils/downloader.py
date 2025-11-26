@@ -2,6 +2,7 @@ import yt_dlp
 import os
 import subprocess
 import logging
+import requests
 from typing import Dict, Any
 
 logging.basicConfig(level=logging.INFO)
@@ -13,6 +14,15 @@ class JayDLDownloader:
         self.base_dir = os.path.join(os.path.expanduser('~'), 'JayDL_Downloads')
         self.setup_directories()
         print(f"Download directory: {self.base_dir}")
+        
+        # List of Invidious instances (public APIs)
+        self.invidious_instances = [
+            'https://vid.puffyan.us',
+            'https://inv.tux.pizza',
+            'https://invidious.nerdvpn.de',
+            'https://yt.artemislena.eu',
+            'https://invidious.lidarshield.cloud'
+        ]
     
     def setup_directories(self):
         """Create necessary directories"""
@@ -37,41 +47,98 @@ class JayDLDownloader:
         else:
             return 'generic'
     
+    def extract_youtube_id(self, url: str) -> str:
+        """Extract YouTube video ID from URL"""
+        import re
+        patterns = [
+            r'(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&?\n]+)',
+            r'youtube\.com\/embed\/([^&?\n]+)',
+            r'youtube\.com\/v\/([^&?\n]+)'
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, url)
+            if match:
+                return match.group(1)
+        return None
+    
+    def get_video_info_via_invidious(self, url: str) -> Dict[str, Any]:
+        """Get video info using Invidious API to bypass restrictions"""
+        video_id = self.extract_youtube_id(url)
+        if not video_id:
+            return {'success': False, 'error': 'Could not extract YouTube video ID'}
+        
+        # Try different Invidious instances
+        for instance in self.invidious_instances:
+            try:
+                api_url = f"{instance}/api/v1/videos/{video_id}"
+                print(f"Trying Invidious instance: {instance}")
+                
+                response = requests.get(api_url, timeout=10)
+                if response.status_code == 200:
+                    data = response.json()
+                    
+                    # Format the response to match our expected structure
+                    formats = []
+                    if 'formatStreams' in data:
+                        for stream in data['formatStreams']:
+                            if 'quality' in stream:
+                                formats.append({
+                                    'format_id': stream.get('itag', 'unknown'),
+                                    'resolution': stream['quality'],
+                                    'height': self.parse_resolution(stream['quality']),
+                                    'filesize': 'Unknown',
+                                    'format': f"{stream['quality']} - {stream.get('type', 'unknown')}"
+                                })
+                    
+                    return {
+                        'success': True,
+                        'title': data.get('title', 'Unknown'),
+                        'duration': self.format_duration(data.get('lengthSeconds', 0)),
+                        'thumbnail': data.get('videoThumbnails', [{}])[0].get('url', ''),
+                        'view_count': data.get('viewCount', 0),
+                        'uploader': data.get('author', 'Unknown'),
+                        'formats': formats,
+                        'platform': 'youtube',
+                        'source': 'invidious'
+                    }
+                    
+            except Exception as e:
+                print(f"Invidious instance {instance} failed: {e}")
+                continue
+        
+        return {'success': False, 'error': 'All Invidious instances failed'}
+    
+    def parse_resolution(self, quality: str) -> int:
+        """Parse resolution from quality string"""
+        if '1080' in quality:
+            return 1080
+        elif '720' in quality:
+            return 720
+        elif '480' in quality:
+            return 480
+        elif '360' in quality:
+            return 360
+        return 0
+    
     def get_video_info(self, url: str) -> Dict[str, Any]:
         """Get available formats and info for a video"""
+        platform = self.detect_platform(url)
+        
+        # For YouTube, try Invidious first, fallback to yt-dlp
+        if platform == 'youtube':
+            invidious_result = self.get_video_info_via_invidious(url)
+            if invidious_result['success']:
+                print("Successfully got info via Invidious")
+                return invidious_result
+            else:
+                print("Invidious failed, falling back to yt-dlp")
+        
+        # Fallback to yt-dlp for other platforms or if Invidious fails
         ydl_opts = {
             'quiet': True,
             'no_warnings': False,
             'extract_flat': False,
-            
-            # Advanced anti-bot settings
-            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'referer': 'https://www.youtube.com/',
-            
-            # Retry settings
-            'retries': 15,
-            'fragment_retries': 15,
-            'skip_unavailable_fragments': True,
-            'ignoreerrors': True,
-            'no_check_certificate': True,
-            
-            # YouTube specific settings
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['android', 'web'],
-                    'player_skip': ['configs', 'webpage', 'js']
-                }
-            },
-            
-            # HTTP headers
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Cache-Control': 'no-cache',
-                'Connection': 'keep-alive',
-            }
         }
         
         try:
@@ -106,7 +173,7 @@ class JayDLDownloader:
                     'view_count': info.get('view_count', 0),
                     'uploader': info.get('uploader', 'Unknown'),
                     'formats': formats,
-                    'platform': self.detect_platform(url)
+                    'platform': platform
                 }
         except Exception as e:
             return {'success': False, 'error': str(e)}
@@ -149,53 +216,9 @@ class JayDLDownloader:
             return {'success': False, 'error': str(e)}
     
     def get_ytdlp_options(self, url: str, quality: str, media_type: str, platform: str):
-        """Get optimized yt-dlp options for each platform"""
-        # Base options for all platforms
-        base_opts = {
-            'quiet': False,
-            'no_warnings': False,
-            
-            # Enhanced anti-bot settings
-            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'referer': 'https://www.youtube.com/',
-            
-            # Retry and error handling
-            'retries': 20,
-            'fragment_retries': 20,
-            'skip_unavailable_fragments': True,
-            'ignoreerrors': True,
-            'no_check_certificate': True,
-            
-            # YouTube specific optimizations
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['android', 'web'],
-                    'player_skip': ['configs', 'webpage', 'js'],
-                    'throttled_rate': '100K'
-                }
-            },
-            
-            # HTTP settings
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Cache-Control': 'no-cache',
-                'Connection': 'keep-alive',
-                'Sec-Fetch-Dest': 'document',
-                'Sec-Fetch-Mode': 'navigate',
-                'Sec-Fetch-Site': 'none',
-                'Upgrade-Insecure-Requests': '1',
-            },
-            
-            # Rate limiting to avoid detection
-            'ratelimit': 1048576,  # 1 MB/s
-            'throttledratelimit': 524288,  # 512 KB/s
-        }
-        
+        """Get optimized yt-dlp options"""
         if media_type == 'audio':
-            base_opts.update({
+            return {
                 'outtmpl': os.path.join(self.base_dir, 'music', '%(title)s.%(ext)s'),
                 'format': 'bestaudio/best',
                 'postprocessors': [{
@@ -203,12 +226,9 @@ class JayDLDownloader:
                     'preferredcodec': 'mp3',
                     'preferredquality': '320',
                 }],
-            })
+            }
         else:
-            # Platform-specific format handling
-            if platform == 'tiktok':
-                format_spec = 'best'
-            elif platform == 'instagram':
+            if platform in ['tiktok', 'instagram']:
                 format_spec = 'best'
             else:
                 quality_map = {
@@ -221,39 +241,19 @@ class JayDLDownloader:
                 }
                 format_spec = quality_map.get(quality, 'best')
             
-            base_opts.update({
+            return {
                 'outtmpl': os.path.join(self.base_dir, 'videos', '%(title)s.%(ext)s'),
                 'format': format_spec,
                 'merge_output_format': 'mp4',
-            })
-            
-            # Platform-specific headers
-            if platform == 'tiktok':
-                base_opts['http_headers'].update({
-                    'Referer': 'https://www.tiktok.com/',
-                    'Origin': 'https://www.tiktok.com',
-                })
-            elif platform == 'instagram':
-                base_opts['http_headers'].update({
-                    'Referer': 'https://www.instagram.com/',
-                    'Origin': 'https://www.instagram.com',
-                })
-            elif platform == 'twitter':
-                base_opts['http_headers'].update({
-                    'Referer': 'https://twitter.com/',
-                    'Origin': 'https://twitter.com',
-                })
-        
-        return base_opts
+            }
     
     def download_with_ytdlp(self, url: str, quality: str, media_type: str, platform: str) -> Dict[str, Any]:
-        """Download using yt-dlp for various platforms"""
+        """Download using yt-dlp"""
         try:
             ydl_opts = self.get_ytdlp_options(url, quality, media_type, platform)
             
             print(f"Downloading: {url}")
             print(f"Platform: {platform}, Quality: {quality}, Type: {media_type}")
-            print(f"Using enhanced anti-bot configuration...")
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=True)
@@ -279,20 +279,11 @@ class JayDLDownloader:
         except Exception as e:
             print(f"Download failed: {e}")
             
-            # Enhanced error handling with specific suggestions
             error_msg = str(e)
             if 'Sign in to confirm' in error_msg or 'bot' in error_msg.lower():
-                error_msg += ". YouTube is blocking automated downloads. Try: 1) Using a different video, 2) Waiting a few hours, 3) Using the 'Best Available' quality."
+                error_msg += ". YouTube is blocking automated downloads. Try using a different video or platform."
             elif 'format is not available' in error_msg:
-                error_msg += ". Try selecting a different quality or use 'Best Available'."
-            elif 'sigi state' in error_msg:
-                error_msg += ". TikTok extraction issue - try again later or use a different URL."
-            elif 'Private video' in error_msg:
-                error_msg += ". This video is private and cannot be downloaded."
-            elif 'Video unavailable' in error_msg:
-                error_msg += ". This video is not available."
-            elif 'HTTP Error 429' in error_msg:
-                error_msg += ". Too many requests - please wait before trying again."
+                error_msg += ". Try selecting a different quality."
             
             return {'success': False, 'error': error_msg}
     
@@ -301,7 +292,6 @@ class JayDLDownloader:
         try:
             print(f"Downloading Spotify: {url}")
             
-            # Using spotdl through command line
             cmd = [
                 'spotdl',
                 'download',
@@ -313,7 +303,6 @@ class JayDLDownloader:
             result = subprocess.run(cmd, capture_output=True, text=True, cwd=self.base_dir, timeout=300)
             
             if result.returncode == 0:
-                # Find the downloaded file
                 for file in os.listdir(os.path.join(self.base_dir, 'music')):
                     if file.endswith('.mp3'):
                         file_path = os.path.join(self.base_dir, 'music', file)
@@ -334,10 +323,6 @@ class JayDLDownloader:
                 print(f"Spotify download failed: {result.stderr}")
                 return {'success': False, 'error': result.stderr}
                 
-        except subprocess.TimeoutExpired:
-            error_msg = 'Download timed out'
-            print(f"Error: {error_msg}")
-            return {'success': False, 'error': error_msg}
         except Exception as e:
             print(f"Spotify download error: {e}")
             return {'success': False, 'error': str(e)}

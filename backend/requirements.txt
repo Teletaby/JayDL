@@ -1,6 +1,6 @@
 flask
 flask-cors
-yt-dlp>=2024.11.25
+yt-dlp
 spotdl
 requests
 python-dotenv

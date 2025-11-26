@@ -165,11 +165,16 @@ class JayDL {
 
         const platform = this.detectPlatform(url);
         
-        // Use client-side for YouTube if available
-        if (platform === 'youtube' && typeof ytdl !== 'undefined') {
-            await this.analyzeYouTubeClientSide(url);
-        } else {
-            // Use backend for other platforms
+        // YouTube: ALWAYS use client-side (no backend fallback)
+        if (platform === 'youtube') {
+            if (typeof ytdl !== 'undefined') {
+                await this.analyzeYouTubeClientSide(url);
+            } else {
+                this.showNotification('YouTube download requires ytdl-core. Please refresh the page.', 'error');
+            }
+        } 
+        // All other platforms: Use backend
+        else {
             await this.analyzeWithBackend(url);
         }
     }
@@ -213,13 +218,14 @@ class JayDL {
             if (errorMessage.includes('Video unavailable')) {
                 errorMessage = 'This video is not available or private';
             } else if (errorMessage.includes('Sign in to confirm')) {
-                errorMessage = 'Please make sure you are logged into YouTube in this browser';
+                errorMessage = 'Please make sure you are logged into YouTube in this browser and refresh the page';
+            } else if (errorMessage.includes('Private video')) {
+                errorMessage = 'This is a private video and cannot be accessed';
             }
             
             this.showNotification(`YouTube analysis failed: ${errorMessage}`, 'error');
             
-            // Fallback to backend for YouTube
-            await this.analyzeWithBackend(url);
+            // NO FALLBACK TO BACKEND - YouTube backend doesn't work due to authentication
         } finally {
             this.hideLoading();
         }
@@ -382,11 +388,16 @@ class JayDL {
         const quality = document.querySelector('#qualityOptions .option-btn.active')?.dataset.quality || 'best';
         const platform = this.currentMediaInfo.platform;
 
-        // Use client-side for YouTube
-        if (platform === 'youtube' && typeof ytdl !== 'undefined') {
-            await this.downloadYouTubeClientSide(url, mediaType, quality);
-        } else {
-            // Use backend for other platforms
+        // YouTube: ALWAYS use client-side (no backend fallback)
+        if (platform === 'youtube') {
+            if (typeof ytdl !== 'undefined') {
+                await this.downloadYouTubeClientSide(url, mediaType, quality);
+            } else {
+                this.showNotification('YouTube download requires ytdl-core. Please refresh the page.', 'error');
+            }
+        } 
+        // All other platforms: Use backend
+        else {
             await this.downloadWithBackend(url, quality, mediaType);
         }
     }
@@ -409,7 +420,7 @@ class JayDL {
                 });
             } else {
                 format = ytdl.chooseFormat(videoInfo.formats, {
-                    quality: quality === 'best' ? 'highest' : 'lowest'
+                    quality: quality === 'best' ? 'highest' : quality + 'p'
                 });
             }
 
@@ -450,15 +461,16 @@ class JayDL {
             
             let errorMessage = error.message;
             if (errorMessage.includes('Sign in to confirm')) {
-                errorMessage = 'Please make sure you are logged into YouTube in this browser and try again';
+                errorMessage = 'Please make sure you are logged into YouTube in this browser and refresh the page';
             } else if (errorMessage.includes('format is not available')) {
-                errorMessage = 'The selected quality is not available for this video';
+                errorMessage = 'The selected quality is not available for this video. Try "Best Available" quality.';
+            } else if (errorMessage.includes('Private video')) {
+                errorMessage = 'This is a private video and cannot be downloaded';
             }
             
             this.showNotification(`YouTube download failed: ${errorMessage}`, 'error');
             
-            // Fallback to backend for YouTube
-            await this.downloadWithBackend(url, quality, mediaType);
+            // NO FALLBACK TO BACKEND - YouTube backend doesn't work due to authentication
         }
     }
 
@@ -650,7 +662,7 @@ class JayDL {
     async loadSupportedPlatforms() {
         try {
             const platforms = [
-                { name: 'YouTube', icon: '🎥', types: ['video', 'audio'], note: 'Client-side download' },
+                { name: 'YouTube', icon: '🎥', types: ['video', 'audio'], note: 'Client-side only (requires browser login)' },
                 { name: 'TikTok', icon: '📱', types: ['video'] },
                 { name: 'Instagram', icon: '📸', types: ['video', 'image'] },
                 { name: 'Twitter/X', icon: '🐦', types: ['video'] },

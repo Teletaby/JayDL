@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify, send_file, render_template
 from flask_cors import CORS
-from downloader import JayDLDownloader
+from utils.downloader import JayDLDownloader
 import os
 import logging
 from datetime import datetime

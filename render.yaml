@@ -1,10 +1,32 @@
 services:
+  # Backend API Service
   - type: web
     name: jaydl-backend
     env: python
     plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: python app.py
+    branch: main
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: cd backend && gunicorn app:app --bind 0.0.0.0:$PORT
     envVars:
       - key: PYTHON_VERSION
-        value: 3.11
+        value: 3.11.0
+    disk:
+      name: downloads
+      mountPath: /opt/render/project/src/backend/downloads
+      sizeGB: 1
+
+  # Frontend Static Site
+  - type: web
+    name: jaydl-frontend
+    env: static
+    plan: free
+    branch: main
+    buildCommand: cd frontend && npm run build
+    publishPath: ./frontend
+    routes:
+      - type: rewrite
+        source: /api/*
+        destination: https://jaydl-backend.onrender.com/api/$1
+      - type: rewrite
+        source: /*
+        destination: /index.html

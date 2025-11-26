@@ -1,7 +1,7 @@
-flask
-flask-cors
-yt-dlp
-spotdl
-requests
-python-dotenv
-gunicorn
+flask==2.3.3
+flask-cors==4.0.0
+yt-dlp==2024.11.25
+spotdl==4.1.7
+requests==2.31.0
+python-dotenv==1.0.0
+gunicorn==21.2.0

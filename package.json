@@ -1,0 +1,12 @@
+{
+  "name": "jaydl-frontend",
+  "version": "1.0.0",
+  "description": "JayDL Frontend",
+  "scripts": {
+    "build": "echo 'No build process needed for static files' && cp -r . ../public/",
+    "dev": "python local-server.py"
+  },
+  "devDependencies": {
+    "concurrently": "^7.6.0"
+  }
+}

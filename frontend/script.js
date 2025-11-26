@@ -9,6 +9,7 @@ class JayDL {
         this.loadDownloadHistory();
         
         console.log(`JayDL running in ${this.isProduction() ? 'PRODUCTION' : 'DEVELOPMENT'} mode`);
+        console.log(`API Base: ${this.apiBase}`);
         
         if (this.isProduction()) {
             this.startKeepAlive();
@@ -25,13 +26,19 @@ class JayDL {
             return 'http://localhost:5000/api';
         }
         
-        // Production - Vercel
-        if (hostname.includes('vercel.app')) {
-            return 'https://jaydl.onrender.com/api';
+        // Production - Render
+        if (hostname.includes('.onrender.com')) {
+            // If we're on the frontend domain, use the backend service URL
+            const currentUrl = window.location.hostname;
+            if (currentUrl.includes('jaydl-frontend')) {
+                return 'https://jaydl-backend.onrender.com/api';
+            }
+            // If we're directly on backend, use relative paths
+            return '/api';
         }
         
-        // Fallback
-        return 'https://jaydl.onrender.com/api';
+        // Fallback (for custom domains)
+        return 'https://jaydl-backend.onrender.com/api';
     }
 
     isProduction() {
@@ -68,7 +75,7 @@ class JayDL {
 
     async testBackendConnection() {
         try {
-            const response = await fetch('https://jaydl.onrender.com/api/health');
+            const response = await fetch(`${this.apiBase}/health`);
             const data = await response.json();
             console.log('Backend connection:', data.status);
             this.showNotification('Connected to download service', 'success');
@@ -79,15 +86,15 @@ class JayDL {
     }
 
     startKeepAlive() {
-        // Ping every 10 minutes to keep backend awake
+        // Ping every 10 minutes to keep backend awake (Render free tier sleeps)
         setInterval(async () => {
             try {
-                await fetch('https://jaydl.onrender.com/ping');
+                await fetch(`${this.apiBase.replace('/api', '')}/ping`);
                 console.log('Keep-alive ping sent');
             } catch (error) {
                 console.log('Keep-alive ping failed');
             }
-        }, 10 * 60 * 1000);
+        }, 5 * 60 * 1000); // 5 minutes
 
         // Also ping when user interacts with the page
         document.addEventListener('click', () => {
@@ -104,12 +111,11 @@ class JayDL {
 
     async sendPing() {
         try {
-            await fetch('https://jaydl.onrender.com/ping', { 
-                method: 'HEAD',
-                mode: 'no-cors'
+            await fetch(`${this.apiBase.replace('/api', '')}/ping`, { 
+                method: 'HEAD'
             });
         } catch (error) {
-            // Silent fail - expected in no-cors mode
+            // Silent fail
         }
     }
 

@@ -8,11 +8,13 @@ from utils.downloader import JayDLDownloader
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
 
-# Configuration
+# Configuration for Render
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max file size
 
-# Initialize downloader with local path
-downloader = JayDLDownloader()
+# Initialize downloader with Render disk storage
+downloads_dir = os.path.join(os.path.dirname(__file__), 'downloads')
+os.makedirs(downloads_dir, exist_ok=True)
+downloader = JayDLDownloader(base_dir=downloads_dir)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -21,19 +23,19 @@ logger = logging.getLogger(__name__)
 @app.route('/')
 def home():
     return jsonify({
-        'message': 'JayDL API is running locally',
+        'message': 'JayDL API is running on Render',
         'status': 'healthy',
         'version': '1.0.0',
-        'environment': 'local'
+        'environment': 'render'
     })
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
     return jsonify({
         'status': 'healthy', 
-        'message': 'JayDL API is running locally',
+        'message': 'JayDL API is running on Render',
         'timestamp': time.time(),
-        'environment': 'local'
+        'environment': 'render'
     })
 
 @app.route('/ping', methods=['GET', 'HEAD'])
@@ -44,7 +46,7 @@ def ping():
 def status_check():
     return jsonify({
         'status': 'healthy',
-        'environment': 'local',
+        'environment': 'render',
         'active': True
     })
 
@@ -94,16 +96,10 @@ def get_downloaded_file(filename):
         if '..' in filename or filename.startswith('/') or '/' in filename:
             return jsonify({'success': False, 'error': 'Invalid filename'})
         
-        # Check both videos and music directories
-        video_path = os.path.join(downloader.base_dir, 'videos', filename)
-        music_path = os.path.join(downloader.base_dir, 'music', filename)
+        # Check downloads directory
+        file_path = os.path.join(downloads_dir, filename)
         
-        file_path = None
-        if os.path.exists(video_path):
-            file_path = video_path
-        elif os.path.exists(music_path):
-            file_path = music_path
-        else:
+        if not os.path.exists(file_path):
             print(f"File not found: {filename}")
             return jsonify({'success': False, 'error': 'File not found on server'})
         
@@ -114,16 +110,6 @@ def get_downloaded_file(filename):
         if file_size == 0:
             print(f"File is empty: {filename}")
             return jsonify({'success': False, 'error': 'File is empty (0 bytes)'})
-        
-        if file_size < 1024:  # Less than 1KB
-            print(f"File too small, likely corrupted: {filename} ({file_size} bytes)")
-            # Read the file to see if it contains an error message
-            try:
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                    print(f"File content: {content}")
-            except:
-                pass
         
         # Determine MIME type based on file extension
         mimetype = 'application/octet-stream'
@@ -156,4 +142,5 @@ def get_downloaded_file(filename):
         return jsonify({'success': False, 'error': f'Download failed: {str(e)}'})
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)

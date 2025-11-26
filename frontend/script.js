@@ -1,6 +1,6 @@
 class JayDL {
     constructor() {
-        // Smart API URL detection - works in both environments
+        // Smart API URL detection - works in all environments
         this.apiBase = this.getApiBaseUrl();
         this.currentMediaInfo = null;
         this.downloadHistory = JSON.parse(localStorage.getItem('jaydl_history')) || [];
@@ -11,6 +11,7 @@ class JayDL {
         
         console.log(`JayDL running in ${this.isProduction() ? 'PRODUCTION' : 'DEVELOPMENT'} mode`);
         console.log(`API Base: ${this.apiBase}`);
+        console.log(`Hostname: ${window.location.hostname}`);
         
         // Auto-start keep-alive only in production
         if (this.isProduction()) {
@@ -28,13 +29,18 @@ class JayDL {
             return 'http://localhost:5000/api';
         }
         
-        // Production
+        // Production - Vercel
+        if (hostname.includes('vercel.app')) {
+            return 'https://jaydl.onrender.com/api';
+        }
+        
+        // Production - Netlify (backup)
         if (hostname.includes('netlify.app')) {
             return 'https://jaydl.onrender.com/api';
         }
         
         // Fallback for other deployments
-        return '/api';
+        return 'https://jaydl.onrender.com/api';
     }
 
     isProduction() {

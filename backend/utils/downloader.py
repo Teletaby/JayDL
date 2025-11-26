@@ -17,16 +17,13 @@ class JayDLDownloader:
         self.setup_directories()
         print(f"Download directory: {self.base_dir}")
         
-        # List of Invidious instances (public APIs)
+        # List of Invidious instances (public APIs) - Updated with working instances
         self.invidious_instances = [
-            'https://vid.puffyan.us',
-            'https://inv.tux.pizza',
-            'https://invidious.nerdvpn.de',
-            'https://yt.artemislena.eu',
-            'https://invidious.lidarshield.cloud',
+            'https://inv.nadeko.net',
             'https://yewtu.be',
-            'https://invidious.privacydev.net',
-            'https://inv.nadeko.net'
+            # Backup instances (may be slower or less reliable)
+            'https://vid.puffyan.us',
+            'https://inv.tux.pizza'
         ]
         
         # Rotating user agents to appear more like real browsers
@@ -435,22 +432,28 @@ class JayDLDownloader:
         try:
             ydl_opts = self.get_ytdlp_options(url, quality, media_type, platform)
             
-            # Add enhanced anti-bot options
+            # Add AGGRESSIVE anti-bot options
             ydl_opts.update({
                 'extractor_args': {
                     'youtube': {
-                        'player_client': ['android', 'web'],
-                        'player_skip': ['webpage', 'configs'],
+                        'player_client': ['android', 'ios', 'mweb', 'web'],
+                        'player_skip': ['webpage', 'configs', 'js'],
+                        'skip': ['hls', 'dash', 'translated_subs']
                     }
                 },
-                'sleep_interval': 1,
-                'max_sleep_interval': 3,
+                'sleep_interval': 2,
+                'max_sleep_interval': 5,
+                'sleep_interval_requests': 1,
+                'sleep_interval_subtitles': 1,
                 'http_headers': {
                     'User-Agent': random.choice(self.user_agents),
                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                     'Accept-Language': 'en-us,en;q=0.5',
                     'Sec-Fetch-Mode': 'navigate',
-                }
+                },
+                # Try to avoid bot detection
+                'nocheckcertificate': True,
+                'no_color': True,
             })
             
             print(f"Downloading with enhanced options: {url}")
@@ -561,4 +564,4 @@ class JayDLDownloader:
                 
         except Exception as e:
             print(f"Spotify download error: {e}")
-            return {'success': False, 'error': str(e)}  
+            return {'success': False, 'error': str(e)}

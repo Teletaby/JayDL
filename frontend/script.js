@@ -1,6 +1,5 @@
 class JayDL {
     constructor() {
-        // Smart API URL detection - works in all environments
         this.apiBase = this.getApiBaseUrl();
         this.currentMediaInfo = null;
         this.downloadHistory = JSON.parse(localStorage.getItem('jaydl_history')) || [];
@@ -10,10 +9,7 @@ class JayDL {
         this.loadDownloadHistory();
         
         console.log(`JayDL running in ${this.isProduction() ? 'PRODUCTION' : 'DEVELOPMENT'} mode`);
-        console.log(`API Base: ${this.apiBase}`);
-        console.log(`Hostname: ${window.location.hostname}`);
         
-        // Auto-start keep-alive only in production
         if (this.isProduction()) {
             this.startKeepAlive();
         }
@@ -34,12 +30,7 @@ class JayDL {
             return 'https://jaydl.onrender.com/api';
         }
         
-        // Production - Netlify (backup)
-        if (hostname.includes('netlify.app')) {
-            return 'https://jaydl.onrender.com/api';
-        }
-        
-        // Fallback for other deployments
+        // Fallback
         return 'https://jaydl.onrender.com/api';
     }
 
@@ -56,7 +47,7 @@ class JayDL {
             if (e.key === 'Enter') this.analyzeUrl();
         });
 
-        // Media type selection
+        // Download type selection
         document.querySelectorAll('.option-btn[data-type]').forEach(btn => {
             btn.addEventListener('click', (e) => this.selectMediaType(e.target));
         });
@@ -77,14 +68,13 @@ class JayDL {
 
     async testBackendConnection() {
         try {
-            // Test the actual API health endpoint
             const response = await fetch('https://jaydl.onrender.com/api/health');
             const data = await response.json();
             console.log('Backend connection:', data.status);
-            this.showNotification('Connected to backend server', 'success');
+            this.showNotification('Connected to download service', 'success');
         } catch (error) {
             console.error('Backend connection failed:', error);
-            this.showNotification('Backend server not running. Please start the backend first.', 'error');
+            this.showNotification('Backend server not running. Some platforms may not work.', 'error');
         }
     }
 
@@ -97,7 +87,7 @@ class JayDL {
             } catch (error) {
                 console.log('Keep-alive ping failed');
             }
-        }, 10 * 60 * 1000); // 10 minutes
+        }, 10 * 60 * 1000);
 
         // Also ping when user interacts with the page
         document.addEventListener('click', () => {
@@ -133,6 +123,22 @@ class JayDL {
         }
     }
 
+    detectPlatform(url) {
+        const urlLower = url.toLowerCase();
+        if (urlLower.includes('youtube.com') || urlLower.includes('youtu.be')) {
+            return 'youtube';
+        } else if (urlLower.includes('tiktok.com')) {
+            return 'tiktok';
+        } else if (urlLower.includes('instagram.com')) {
+            return 'instagram';
+        } else if (urlLower.includes('twitter.com') || urlLower.includes('x.com')) {
+            return 'twitter';
+        } else if (urlLower.includes('spotify.com')) {
+            return 'spotify';
+        }
+        return 'generic';
+    }
+
     async analyzeUrl() {
         const url = document.getElementById('urlInput').value.trim();
         
@@ -141,12 +147,103 @@ class JayDL {
             return;
         }
 
-        // Basic URL validation
         if (!this.isValidUrl(url)) {
             this.showNotification('Please enter a valid URL', 'error');
             return;
         }
 
+        const platform = this.detectPlatform(url);
+        
+        // Use client-side for YouTube if available
+        if (platform === 'youtube' && typeof ytdl !== 'undefined') {
+            await this.analyzeYouTubeClientSide(url);
+        } else {
+            // Use backend for other platforms
+            await this.analyzeWithBackend(url);
+        }
+    }
+
+    isValidUrl(url) {
+        try {
+            new URL(url);
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    async analyzeYouTubeClientSide(url) {
+        this.showLoading('Getting YouTube video info...');
+
+        try {
+            if (!ytdl.validateURL(url)) {
+                throw new Error('Invalid YouTube URL format');
+            }
+
+            const videoInfo = await ytdl.getInfo(url);
+            this.currentMediaInfo = {
+                success: true,
+                title: videoInfo.videoDetails.title,
+                duration: this.formatDuration(videoInfo.videoDetails.lengthSeconds),
+                thumbnail: videoInfo.videoDetails.thumbnails[0]?.url,
+                uploader: videoInfo.videoDetails.author.name,
+                view_count: videoInfo.videoDetails.viewCount,
+                formats: this.parseYouTubeFormats(videoInfo.formats),
+                platform: 'youtube'
+            };
+
+            this.displayMediaInfo(this.currentMediaInfo);
+            this.showNotification('YouTube video info loaded!', 'success');
+
+        } catch (error) {
+            console.error('Error getting YouTube video info:', error);
+            
+            let errorMessage = error.message;
+            if (errorMessage.includes('Video unavailable')) {
+                errorMessage = 'This video is not available or private';
+            } else if (errorMessage.includes('Sign in to confirm')) {
+                errorMessage = 'Please make sure you are logged into YouTube in this browser';
+            }
+            
+            this.showNotification(`YouTube analysis failed: ${errorMessage}`, 'error');
+            
+            // Fallback to backend for YouTube
+            await this.analyzeWithBackend(url);
+        } finally {
+            this.hideLoading();
+        }
+    }
+
+    parseYouTubeFormats(formats) {
+        const uniqueFormats = [];
+        const seenHeights = new Set();
+
+        formats.forEach(format => {
+            if (format.height && !seenHeights.has(format.height)) {
+                seenHeights.add(format.height);
+                uniqueFormats.push({
+                    format_id: format.format_id,
+                    resolution: `${format.height}p`,
+                    height: format.height,
+                    filesize: format.contentLength ? this.formatFileSize(format.contentLength) : 'Unknown',
+                    format: `${format.height}p - ${format.qualityLabel || ''}`
+                });
+            }
+        });
+
+        // Add audio option
+        uniqueFormats.push({
+            format_id: 'audio',
+            resolution: 'Audio Only',
+            height: 0,
+            filesize: 'Unknown',
+            format: 'bestaudio'
+        });
+
+        return uniqueFormats.sort((a, b) => b.height - a.height);
+    }
+
+    async analyzeWithBackend(url) {
         this.showLoading('Analyzing URL...');
 
         try {
@@ -174,15 +271,6 @@ class JayDL {
         }
     }
 
-    isValidUrl(url) {
-        try {
-            new URL(url);
-            return true;
-        } catch {
-            return false;
-        }
-    }
-
     displayMediaInfo(info) {
         const mediaInfoSection = document.getElementById('mediaInfo');
         mediaInfoSection.classList.remove('hidden');
@@ -202,8 +290,10 @@ class JayDL {
             thumbnail.style.display = 'none';
         }
 
-        // Populate quality options
         this.populateQualityOptions(info.formats, info.platform);
+        
+        // Enable download button
+        document.getElementById('downloadBtn').disabled = false;
     }
 
     populateQualityOptions(formats, platform) {
@@ -228,9 +318,6 @@ class JayDL {
             bestButton.dataset.quality = 'best';
             bestButton.addEventListener('click', (e) => this.selectQuality(e.target));
             container.appendChild(bestButton);
-            
-            // Show info message
-            this.showNotification(`${this.capitalizeFirstLetter(platform)} works best with 'Best Available' quality`, 'info');
         } else {
             // Show all available qualities for other platforms
             defaultQualities.forEach(quality => {
@@ -274,15 +361,91 @@ class JayDL {
 
         const url = document.getElementById('urlInput').value.trim();
         const mediaType = document.querySelector('.option-btn[data-type].active').dataset.type;
-        let quality = document.querySelector('#qualityOptions .option-btn.active')?.dataset.quality || 'best';
-        
-        // Auto-adjust quality for platforms with limited formats
+        const quality = document.querySelector('#qualityOptions .option-btn.active')?.dataset.quality || 'best';
         const platform = this.currentMediaInfo.platform;
-        if (platform === 'tiktok' || platform === 'instagram') {
-            quality = 'best'; // Force best quality for these platforms
-        }
 
-        this.showLoading('Starting download...', this.getEstimatedTime(platform));
+        // Use client-side for YouTube
+        if (platform === 'youtube' && typeof ytdl !== 'undefined') {
+            await this.downloadYouTubeClientSide(url, mediaType, quality);
+        } else {
+            // Use backend for other platforms
+            await this.downloadWithBackend(url, quality, mediaType);
+        }
+    }
+
+    async downloadYouTubeClientSide(url, mediaType, quality) {
+        this.showLoading('Preparing YouTube download...');
+
+        try {
+            if (!ytdl.validateURL(url)) {
+                throw new Error('Invalid YouTube URL');
+            }
+
+            const videoInfo = await ytdl.getInfo(url);
+            
+            let format;
+            if (mediaType === 'audio') {
+                format = ytdl.chooseFormat(videoInfo.formats, {
+                    quality: 'highestaudio',
+                    filter: 'audioonly'
+                });
+            } else {
+                format = ytdl.chooseFormat(videoInfo.formats, {
+                    quality: quality === 'best' ? 'highest' : 'lowest'
+                });
+            }
+
+            if (!format) {
+                throw new Error('No suitable format found');
+            }
+
+            // Create download link
+            const a = document.createElement('a');
+            a.href = format.url;
+            
+            // Set filename
+            const fileExtension = mediaType === 'audio' ? 'mp3' : 'mp4';
+            const fileName = this.sanitizeFilename(`${videoInfo.videoDetails.title}.${fileExtension}`);
+            a.download = fileName;
+            
+            // Trigger download
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+
+            this.hideLoading();
+            this.showSuccess('Download started!', 'Your YouTube video is now downloading.');
+
+            // Add to history
+            this.addToDownloadHistory({
+                title: videoInfo.videoDetails.title,
+                filename: fileName,
+                platform: 'youtube',
+                media_type: mediaType,
+                file_size: format.contentLength ? this.formatFileSize(format.contentLength) : 'Unknown',
+                timestamp: new Date().toISOString()
+            });
+
+        } catch (error) {
+            this.hideLoading();
+            console.error('YouTube download error:', error);
+            
+            let errorMessage = error.message;
+            if (errorMessage.includes('Sign in to confirm')) {
+                errorMessage = 'Please make sure you are logged into YouTube in this browser and try again';
+            } else if (errorMessage.includes('format is not available')) {
+                errorMessage = 'The selected quality is not available for this video';
+            }
+            
+            this.showNotification(`YouTube download failed: ${errorMessage}`, 'error');
+            
+            // Fallback to backend for YouTube
+            await this.downloadWithBackend(url, quality, mediaType);
+        }
+    }
+
+    async downloadWithBackend(url, quality, mediaType) {
+        this.showLoading('Starting download...', this.getEstimatedTime(this.currentMediaInfo.platform));
 
         try {
             const response = await fetch(`${this.apiBase}/download`, {
@@ -313,7 +476,6 @@ class JayDL {
     }
 
     getEstimatedTime(platform) {
-        // Return estimated time in seconds based on platform
         const times = {
             'youtube': 30,
             'tiktok': 45,
@@ -337,22 +499,12 @@ class JayDL {
         title.textContent = 'Download Complete!';
         message.innerHTML = `
             "${result.title}" has been downloaded successfully.<br>
-            <strong>File size:</strong> ${result.file_size}<br><br>
-            <em>File saved to: C:\\Users\\rosen\\JayDL_Downloads\\videos\\</em>
+            <strong>File size:</strong> ${result.file_size}
         `;
         
         action.textContent = `Download ${result.filename}`;
         action.onclick = () => this.downloadFile(result.filename);
         
-        // Add file browser button
-        const fileBrowserBtn = document.createElement('button');
-        fileBrowserBtn.textContent = 'Open File Location';
-        fileBrowserBtn.className = 'close-btn';
-        fileBrowserBtn.style.marginLeft = '10px';
-        fileBrowserBtn.onclick = () => this.showFileBrowserOption();
-        
-        action.parentNode.appendChild(fileBrowserBtn);
-
         this.showModal('resultModal');
     }
 
@@ -360,15 +512,6 @@ class JayDL {
         try {
             this.showLoading('Preparing download...');
             
-            console.log(`Starting download: ${filename}`);
-            
-            // Create a hidden iframe for download
-            const iframe = document.createElement('iframe');
-            iframe.style.display = 'none';
-            iframe.src = `${this.apiBase}/downloaded-file/${filename}`;
-            document.body.appendChild(iframe);
-            
-            // Also try the fetch method as backup
             const response = await fetch(`${this.apiBase}/downloaded-file/${filename}`);
             
             if (!response.ok) {
@@ -376,20 +519,11 @@ class JayDL {
                 throw new Error(errorData.error || `Server error: ${response.status}`);
             }
             
-            // Get file size from headers
-            const contentLength = response.headers.get('Content-Length');
-            const fileSize = contentLength ? this.formatFileSize(parseInt(contentLength)) : 'Unknown';
-            
-            console.log(`Download response OK, file size: ${fileSize}`);
-            
-            // Convert to blob and download
             const blob = await response.blob();
             
             if (blob.size === 0) {
                 throw new Error('Downloaded file is empty (0 bytes)');
             }
-            
-            console.log(`Blob size: ${blob.size} bytes`);
             
             // Create download link
             const url = window.URL.createObjectURL(blob);
@@ -404,135 +538,61 @@ class JayDL {
             // Cleanup
             window.URL.revokeObjectURL(url);
             document.body.removeChild(a);
-            document.body.removeChild(iframe);
             
             this.hideLoading();
-            
-            // Verify download
-            setTimeout(() => {
-                this.showNotification(`Download started! File size: ${fileSize}`, 'success');
-            }, 1000);
+            this.showNotification('Download started!', 'success');
             
         } catch (error) {
             this.hideLoading();
             console.error('Download error:', error);
-            
-            let errorMessage = error.message;
-            
-            // Provide helpful error messages
-            if (errorMessage.includes('empty') || errorMessage.includes('0 bytes')) {
-                errorMessage = 'Downloaded file is empty. The file may be corrupted on the server.';
-            } else if (errorMessage.includes('not found')) {
-                errorMessage = 'File not found on server. It may have been deleted or the download failed.';
-            } else if (errorMessage.includes('CORS') || errorMessage.includes('Network')) {
-                errorMessage = 'Network error. Please check your connection and try again.';
-            }
-            
-            this.showNotification(`Download failed: ${errorMessage}`, 'error');
-            
-            // Alternative download method
-            this.showAlternativeDownload(filename);
+            this.showNotification(`Download failed: ${error.message}`, 'error');
+        }
+    }
+
+    sanitizeFilename(filename) {
+        return filename.replace(/[<>:"/\\|?*]/g, '_');
+    }
+
+    formatDuration(seconds) {
+        if (!seconds) return "Unknown";
+        const hours = Math.floor(seconds / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        const secs = Math.floor(seconds % 60);
+        
+        if (hours > 0) {
+            return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+        } else {
+            return `${minutes}:${secs.toString().padStart(2, '0')}`;
         }
     }
 
     formatFileSize(bytes) {
-        if (bytes === 0) return "0 B";
+        if (!bytes) return "Unknown";
         const sizes = ["B", "KB", "MB", "GB"];
         const i = Math.floor(Math.log(bytes) / Math.log(1024));
         return Math.round(bytes / Math.pow(1024, i) * 100) / 100 + " " + sizes[i];
     }
 
-    showAlternativeDownload(filename) {
-        // Create a direct download link as fallback
-        const directUrl = `${this.apiBase}/downloaded-file/${filename}`;
-        
-        const modal = document.getElementById('resultModal');
-        const icon = document.getElementById('resultIcon');
-        const title = document.getElementById('resultTitle');
-        const message = document.getElementById('resultMessage');
-        const action = document.getElementById('resultAction');
-
-        icon.className = 'result-icon error';
-        icon.innerHTML = '<i class="fas fa-exclamation-triangle"></i>';
-        title.textContent = 'Download Issue';
-        message.innerHTML = `
-            Automatic download failed. <br><br>
-            <strong>Try these alternatives:</strong><br>
-            1. <button onclick="jaydl.directDownload('${filename}')" style="background: #667eea; color: white; border: none; padding: 5px 10px; border-radius: 5px; cursor: pointer;">Click here for direct download</button><br>
-            2. <a href="${directUrl}" target="_blank" style="color: #667eea; text-decoration: underline;">Right-click and Save As</a><br>
-            3. File location: C:\\Users\\rosen\\JayDL_Downloads\\videos\\${filename}
-        `;
-        
-        action.textContent = 'Close';
-        action.onclick = () => this.closeModal();
-
-        this.showModal('resultModal');
-    }
-
-    directDownload(filename) {
-        // Direct download method
-        const directUrl = `${this.apiBase}/downloaded-file/${filename}`;
-        window.open(directUrl, '_blank');
-    }
-
-    showFileBrowserOption() {
-        const modal = document.getElementById('resultModal');
-        const icon = document.getElementById('resultIcon');
-        const title = document.getElementById('resultTitle');
-        const message = document.getElementById('resultMessage');
-        const action = document.getElementById('resultAction');
-
-        icon.className = 'result-icon info';
-        icon.innerHTML = '<i class="fas fa-folder-open"></i>';
-        title.textContent = 'Access Files Manually';
-        message.innerHTML = `
-            <strong>Your downloaded files are here:</strong><br><br>
-            <code style="background: #f0f0f0; padding: 10px; border-radius: 5px; display: block;">
-                C:\\Users\\rosen\\JayDL_Downloads\\videos\\
-            </code><br>
-            <strong>Steps:</strong><br>
-            1. Open File Explorer<br>
-            2. Paste the path above in the address bar<br>
-            3. Find your downloaded files<br>
-            4. Copy them to your preferred location<br><br>
-            <em>All successfully downloaded files are stored here automatically.</em>
-        `;
-        
-        action.textContent = 'Copy Path to Clipboard';
-        action.onclick = () => {
-            navigator.clipboard.writeText('C:\\Users\\rosen\\JayDL_Downloads\\videos\\');
-            this.showNotification('File path copied to clipboard!', 'success');
-            this.closeModal();
-        };
-        
-        // Add secondary button
-        const secondaryBtn = document.createElement('button');
-        secondaryBtn.textContent = 'Close';
-        secondaryBtn.className = 'close-btn';
-        secondaryBtn.style.marginLeft = '10px';
-        secondaryBtn.onclick = () => this.closeModal();
-        
-        action.parentNode.appendChild(secondaryBtn);
-
-        this.showModal('resultModal');
+    formatViews(viewCount) {
+        if (!viewCount) return 'Unknown';
+        const count = parseInt(viewCount);
+        if (count >= 1000000) {
+            return (count / 1000000).toFixed(1) + 'M';
+        } else if (count >= 1000) {
+            return (count / 1000).toFixed(1) + 'K';
+        }
+        return count.toString();
     }
 
     addToDownloadHistory(download) {
-        const historyItem = {
+        let history = JSON.parse(localStorage.getItem('jaydl_history')) || [];
+        history.unshift({
             id: Date.now(),
-            title: download.title,
-            filename: download.filename,
-            platform: download.platform,
-            media_type: download.media_type,
-            timestamp: new Date().toISOString(),
-            file_size: download.file_size
-        };
-
-        this.downloadHistory.unshift(historyItem);
+            ...download
+        });
         // Keep only last 10 downloads
-        this.downloadHistory = this.downloadHistory.slice(0, 10);
-        
-        localStorage.setItem('jaydl_history', JSON.stringify(this.downloadHistory));
+        history = history.slice(0, 10);
+        localStorage.setItem('jaydl_history', JSON.stringify(history));
         this.loadDownloadHistory();
     }
 
@@ -555,22 +615,19 @@ class JayDL {
                         ${new Date(item.timestamp).toLocaleString()}
                     </div>
                 </div>
-                <div class="history-actions">
-                    <button class="option-btn" onclick="jaydl.downloadFile('${item.filename}')" title="Download again">
-                        <i class="fas fa-download"></i>
-                    </button>
-                    <button class="option-btn" onclick="jaydl.showFileBrowserOption()" title="Open file location">
-                        <i class="fas fa-folder-open"></i>
-                    </button>
-                </div>
             </div>
         `).join('');
     }
 
     async loadSupportedPlatforms() {
         try {
-            const response = await fetch(`${this.apiBase}/supported-platforms`);
-            const platforms = await response.json();
+            const platforms = [
+                { name: 'YouTube', icon: '🎥', types: ['video', 'audio'], note: 'Client-side download' },
+                { name: 'TikTok', icon: '📱', types: ['video'] },
+                { name: 'Instagram', icon: '📸', types: ['video', 'image'] },
+                { name: 'Twitter/X', icon: '🐦', types: ['video'] },
+                { name: 'Spotify', icon: '🎵', types: ['audio'] }
+            ];
             
             const container = document.getElementById('platformsGrid');
             container.innerHTML = platforms.map(platform => `
@@ -580,34 +637,12 @@ class JayDL {
                     <div style="font-size: 0.9em; color: #666;">
                         ${platform.types.join(', ')}
                     </div>
+                    ${platform.note ? `<div style="font-size: 0.8em; color: #667eea; margin-top: 5px;">${platform.note}</div>` : ''}
                 </div>
             `).join('');
         } catch (error) {
             console.error('Failed to load supported platforms:', error);
-            // Fallback platforms if API fails
-            this.showFallbackPlatforms();
         }
-    }
-
-    showFallbackPlatforms() {
-        const fallbackPlatforms = [
-            { name: 'YouTube', icon: '🎥', types: ['video', 'audio'] },
-            { name: 'Spotify', icon: '🎵', types: ['audio'] },
-            { name: 'TikTok', icon: '📱', types: ['video'] },
-            { name: 'Instagram', icon: '📸', types: ['video', 'image'] },
-            { name: 'Twitter/X', icon: '🐦', types: ['video'] }
-        ];
-        
-        const container = document.getElementById('platformsGrid');
-        container.innerHTML = fallbackPlatforms.map(platform => `
-            <div class="platform-card">
-                <div class="platform-icon">${platform.icon}</div>
-                <h4>${platform.name}</h4>
-                <div style="font-size: 0.9em; color: #666;">
-                    ${platform.types.join(', ')}
-                </div>
-            </div>
-        `).join('');
     }
 
     showLoading(message = 'Loading...', estimatedTime = null) {
@@ -635,16 +670,30 @@ class JayDL {
             }
         }, 1000);
         
-        // Store timer reference to clear if needed
         this.estimatedTimer = timer;
     }
 
     hideLoading() {
         document.getElementById('loadingModal').classList.add('hidden');
-        // Clear any running timers
         if (this.estimatedTimer) {
             clearInterval(this.estimatedTimer);
         }
+    }
+
+    showSuccess(title, message) {
+        const modal = document.getElementById('resultModal');
+        const icon = document.getElementById('resultIcon');
+        const titleEl = document.getElementById('resultTitle');
+        const messageEl = document.getElementById('resultMessage');
+        const action = document.getElementById('resultAction');
+
+        icon.className = 'result-icon success';
+        icon.innerHTML = '<i class="fas fa-check-circle"></i>';
+        titleEl.textContent = title;
+        messageEl.textContent = message;
+        action.style.display = 'none';
+        
+        this.showModal('resultModal');
     }
 
     showModal(modalId) {
@@ -658,7 +707,6 @@ class JayDL {
     }
 
     showNotification(message, type = 'info') {
-        // Create notification element
         const notification = document.createElement('div');
         notification.className = `notification ${type === 'error' ? 'error' : ''}`;
         notification.innerHTML = `
@@ -668,7 +716,6 @@ class JayDL {
 
         document.body.appendChild(notification);
 
-        // Remove after 3 seconds
         setTimeout(() => {
             notification.style.animation = 'slideOut 0.3s ease';
             setTimeout(() => {
@@ -676,7 +723,7 @@ class JayDL {
                     notification.parentNode.removeChild(notification);
                 }
             }, 300);
-        }, 3000);
+        }, 4000);
     }
 
     capitalizeFirstLetter(string) {
@@ -684,7 +731,7 @@ class JayDL {
     }
 }
 
-// Add CSS animations for notifications if not already in style.css
+// Add CSS animations for notifications
 const ensureNotificationStyles = () => {
     if (!document.querySelector('#jaydl-notification-styles')) {
         const style = document.createElement('style');

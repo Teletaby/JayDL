@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>JayDL - Ultimate Media Downloader</title>
-    <meta name="description" content="Download videos and music from YouTube, Spotify, TikTok and more in 4K quality">
+    <title>JayDL - YouTube Video Downloader</title>
+    <meta name="description" content="Download YouTube videos directly in your browser">
     <link rel="stylesheet" href="/style.css">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
 </head>
@@ -13,10 +13,11 @@
         <!-- Header -->
         <header class="header">
             <div class="logo">
-                <i class="fas fa-download"></i>
+                <i class="fab fa-youtube"></i>
                 <h1>JayDL</h1>
             </div>
-            <p class="tagline">Download videos & music in 4K quality</p>
+            <p class="tagline">Download YouTube videos directly in your browser</p>
+            <p class="notice"><i class="fas fa-info-circle"></i> Must be logged into YouTube in this browser</p>
         </header>
 
         <!-- Main Content -->
@@ -27,7 +28,7 @@
                     <input 
                         type="url" 
                         id="urlInput" 
-                        placeholder="Paste YouTube, Spotify, TikTok, Instagram, Twitter, etc. URL here..."
+                        placeholder="Paste YouTube URL here (e.g., https://www.youtube.com/watch?v=...)"
                         class="url-input"
                     >
                     <button id="pasteBtn" class="paste-btn" title="Paste from clipboard">
@@ -36,20 +37,20 @@
                 </div>
                 <button id="analyzeBtn" class="analyze-btn">
                     <i class="fas fa-search"></i>
-                    Analyze URL
+                    Get Video Info
                 </button>
             </section>
 
-            <!-- Media Info Section -->
-            <section id="mediaInfo" class="media-info hidden">
-                <div class="media-preview">
-                    <img id="mediaThumbnail" src="" alt="Media thumbnail" class="thumbnail">
-                    <div class="media-details">
-                        <h3 id="mediaTitle">Media Title</h3>
-                        <div class="media-meta">
-                            <span id="mediaDuration"><i class="fas fa-clock"></i> Duration</span>
-                            <span id="mediaUploader"><i class="fas fa-user"></i> Uploader</span>
-                            <span id="mediaPlatform"><i class="fas fa-globe"></i> Platform</span>
+            <!-- Video Info Section -->
+            <section id="videoInfo" class="video-info hidden">
+                <div class="video-preview">
+                    <img id="videoThumbnail" src="" alt="Video thumbnail" class="thumbnail">
+                    <div class="video-details">
+                        <h3 id="videoTitle">Video Title</h3>
+                        <div class="video-meta">
+                            <span id="videoDuration"><i class="fas fa-clock"></i> Duration</span>
+                            <span id="videoChannel"><i class="fas fa-user"></i> Channel</span>
+                            <span id="videoViews"><i class="fas fa-eye"></i> Views</span>
                         </div>
                     </div>
                 </div>
@@ -57,13 +58,13 @@
                 <!-- Download Options -->
                 <div class="download-options">
                     <div class="option-group">
-                        <label>Media Type:</label>
+                        <label>Download Type:</label>
                         <div class="btn-group">
                             <button class="option-btn active" data-type="video">
                                 <i class="fas fa-video"></i> Video
                             </button>
                             <button class="option-btn" data-type="audio">
-                                <i class="fas fa-music"></i> Audio
+                                <i class="fas fa-music"></i> Audio Only
                             </button>
                         </div>
                     </div>
@@ -71,30 +72,74 @@
                     <div class="option-group">
                         <label>Quality:</label>
                         <div class="btn-group" id="qualityOptions">
-                            <!-- Quality options will be populated dynamically -->
+                            <button class="option-btn active" data-quality="highest">
+                                <i class="fas fa-star"></i> Best Quality
+                            </button>
+                            <button class="option-btn" data-quality="lowest">
+                                <i class="fas fa-compress"></i> Smaller File
+                            </button>
                         </div>
                     </div>
 
                     <button id="downloadBtn" class="download-btn">
                         <i class="fas fa-download"></i>
-                        Start Download
+                        Download Now
                     </button>
+                </div>
+            </section>
+
+            <!-- How It Works -->
+            <section class="info-section">
+                <h3>How It Works</h3>
+                <div class="info-steps">
+                    <div class="step">
+                        <div class="step-icon">1</div>
+                        <div class="step-content">
+                            <h4>Be Logged Into YouTube</h4>
+                            <p>Make sure you're signed into YouTube in this browser</p>
+                        </div>
+                    </div>
+                    <div class="step">
+                        <div class="step-icon">2</div>
+                        <div class="step-content">
+                            <h4>Paste Video URL</h4>
+                            <p>Copy and paste any YouTube video link</p>
+                        </div>
+                    </div>
+                    <div class="step">
+                        <div class="step-icon">3</div>
+                        <div class="step-content">
+                            <h4>Download Directly</h4>
+                            <p>Video downloads directly to your computer</p>
+                        </div>
+                    </div>
                 </div>
             </section>
 
             <!-- Supported Platforms -->
             <section class="platforms-section">
-                <h3>Supported Platforms</h3>
-                <div class="platforms-grid" id="platformsGrid">
-                    <!-- Platforms will be populated dynamically -->
-                </div>
-            </section>
-
-            <!-- Download History -->
-            <section class="history-section">
-                <h3>Recent Downloads</h3>
-                <div class="history-list" id="historyList">
-                    <!-- Download history will be populated here -->
+                <h3>Also Works With</h3>
+                <div class="platforms-grid">
+                    <div class="platform-card">
+                        <div class="platform-icon"><i class="fab fa-tiktok"></i></div>
+                        <h4>TikTok</h4>
+                        <p>Videos & sounds</p>
+                    </div>
+                    <div class="platform-card">
+                        <div class="platform-icon"><i class="fab fa-instagram"></i></div>
+                        <h4>Instagram</h4>
+                        <p>Reels & posts</p>
+                    </div>
+                    <div class="platform-card">
+                        <div class="platform-icon"><i class="fab fa-twitter"></i></div>
+                        <h4>Twitter/X</h4>
+                        <p>Video posts</p>
+                    </div>
+                    <div class="platform-card">
+                        <div class="platform-icon"><i class="fas fa-music"></i></div>
+                        <h4>SoundCloud</h4>
+                        <p>Audio tracks</p>
+                    </div>
                 </div>
             </section>
         </main>
@@ -110,8 +155,8 @@
     <div id="loadingModal" class="modal hidden">
         <div class="modal-content">
             <div class="loader"></div>
-            <h3>Processing your request...</h3>
-            <p id="loadingMessage">Please wait while we process your download</p>
+            <h3>Processing...</h3>
+            <p id="loadingMessage">Getting video information</p>
         </div>
     </div>
 
@@ -119,13 +164,14 @@
     <div id="resultModal" class="modal hidden">
         <div class="modal-content">
             <div id="resultIcon" class="result-icon"></div>
-            <h3 id="resultTitle">Download Complete</h3>
-            <p id="resultMessage">Your file has been downloaded successfully</p>
-            <button id="resultAction" class="download-btn">Download File</button>
+            <h3 id="resultTitle">Download Ready</h3>
+            <p id="resultMessage">Your download will start automatically</p>
             <button id="closeModal" class="close-btn">Close</button>
         </div>
     </div>
 
+    <!-- Add ytdl-core for YouTube downloads -->
+    <script src="https://cdn.jsdelivr.net/npm/ytdl-core@4.11.5/dist/ytdl-core.min.js"></script>
     <script src="/script.js"></script>
 </body>
 </html>

@@ -20,22 +20,22 @@ class JayDL {
         this.testBackendConnection();
     }
 
-   getApiBaseUrl() {
-    const hostname = window.location.hostname;
-    
-    // Development (local)
-    if (hostname === 'localhost' || hostname === '127.0.0.1') {
-        return 'http://localhost:5000/api';
+    getApiBaseUrl() {
+        const hostname = window.location.hostname;
+        
+        // Development (local)
+        if (hostname === 'localhost' || hostname === '127.0.0.1') {
+            return 'http://localhost:5000/api';
+        }
+        
+        // Production
+        if (hostname.includes('netlify.app')) {
+            return 'https://jaydl.onrender.com/api';
+        }
+        
+        // Fallback for other deployments
+        return '/api';
     }
-    
-    // Production (your deployed frontend)
-    if (hostname.includes('netlify.app')) {
-        return 'https://jaydl.onrender.com/api';
-    }
-    
-    // Fallback for other deployments
-    return '/api';
-}
 
     isProduction() {
         return !window.location.hostname.includes('localhost') && 
@@ -71,7 +71,8 @@ class JayDL {
 
     async testBackendConnection() {
         try {
-            const response = await fetch(`${this.apiBase.replace('/api', '')}/health`);
+            // Test the actual API health endpoint
+            const response = await fetch('https://jaydl.onrender.com/api/health');
             const data = await response.json();
             console.log('Backend connection:', data.status);
             this.showNotification('Connected to backend server', 'success');
@@ -85,7 +86,7 @@ class JayDL {
         // Ping every 10 minutes to keep backend awake
         setInterval(async () => {
             try {
-                await fetch(`${this.apiBase.replace('/api', '')}/ping`);
+                await fetch('https://jaydl.onrender.com/ping');
                 console.log('Keep-alive ping sent');
             } catch (error) {
                 console.log('Keep-alive ping failed');
@@ -107,7 +108,7 @@ class JayDL {
 
     async sendPing() {
         try {
-            await fetch(`${this.apiBase.replace('/api', '')}/ping`, { 
+            await fetch('https://jaydl.onrender.com/ping', { 
                 method: 'HEAD',
                 mode: 'no-cors'
             });

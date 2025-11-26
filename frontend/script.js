@@ -20,22 +20,22 @@ class JayDL {
         this.testBackendConnection();
     }
 
-    getApiBaseUrl() {
-        const hostname = window.location.hostname;
-        
-        // Development (local)
-        if (hostname === 'localhost' || hostname === '127.0.0.1') {
-            return 'http://localhost:5000/api';
-        }
-        
-        // Production (your deployed frontend)
-        if (hostname.includes('netlify.app')) {
-            return 'https://jaydl.onrender.com/';
-        }
-        
-        // Fallback for other deployments
-        return '/api'; // Relative URL for same-domain deployment
+   getApiBaseUrl() {
+    const hostname = window.location.hostname;
+    
+    // Development (local)
+    if (hostname === 'localhost' || hostname === '127.0.0.1') {
+        return 'http://localhost:5000/api';
     }
+    
+    // Production (your deployed frontend)
+    if (hostname.includes('netlify.app')) {
+        return 'https://jaydl.onrender.com/api';
+    }
+    
+    // Fallback for other deployments
+    return '/api';
+}
 
     isProduction() {
         return !window.location.hostname.includes('localhost') && 
@@ -71,7 +71,7 @@ class JayDL {
 
     async testBackendConnection() {
         try {
-            const response = await fetch(`${this.apiBase}/health`);
+            const response = await fetch(`${this.apiBase.replace('/api', '')}/health`);
             const data = await response.json();
             console.log('Backend connection:', data.status);
             this.showNotification('Connected to backend server', 'success');

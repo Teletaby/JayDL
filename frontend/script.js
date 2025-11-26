@@ -30,7 +30,7 @@ class JayDL {
         
         // Production (your deployed frontend)
         if (hostname.includes('netlify.app')) {
-            return 'https://your-app-name.onrender.com/api'; // UPDATE THIS WITH YOUR ACTUAL RENDER URL
+            return 'https://jaydl.onrender.com/';
         }
         
         // Fallback for other deployments

@@ -163,20 +163,8 @@ class JayDL {
             return;
         }
 
-        const platform = this.detectPlatform(url);
-        
-        // YouTube: ALWAYS use client-side (no backend fallback)
-        if (platform === 'youtube') {
-            if (typeof ytdl !== 'undefined') {
-                await this.analyzeYouTubeClientSide(url);
-            } else {
-                this.showNotification('YouTube download requires ytdl-core. Please refresh the page.', 'error');
-            }
-        } 
-        // All other platforms: Use backend
-        else {
-            await this.analyzeWithBackend(url);
-        }
+        // ALL platforms use backend now (including YouTube)
+        await this.analyzeWithBackend(url);
     }
 
     isValidUrl(url) {
@@ -186,78 +174,6 @@ class JayDL {
         } catch {
             return false;
         }
-    }
-
-    async analyzeYouTubeClientSide(url) {
-        this.showLoading('Getting YouTube video info...');
-
-        try {
-            if (!ytdl.validateURL(url)) {
-                throw new Error('Invalid YouTube URL format');
-            }
-
-            const videoInfo = await ytdl.getInfo(url);
-            this.currentMediaInfo = {
-                success: true,
-                title: videoInfo.videoDetails.title,
-                duration: this.formatDuration(videoInfo.videoDetails.lengthSeconds),
-                thumbnail: videoInfo.videoDetails.thumbnails[0]?.url,
-                uploader: videoInfo.videoDetails.author.name,
-                view_count: videoInfo.videoDetails.viewCount,
-                formats: this.parseYouTubeFormats(videoInfo.formats),
-                platform: 'youtube'
-            };
-
-            this.displayMediaInfo(this.currentMediaInfo);
-            this.showNotification('YouTube video info loaded!', 'success');
-
-        } catch (error) {
-            console.error('Error getting YouTube video info:', error);
-            
-            let errorMessage = error.message;
-            if (errorMessage.includes('Video unavailable')) {
-                errorMessage = 'This video is not available or private';
-            } else if (errorMessage.includes('Sign in to confirm')) {
-                errorMessage = 'Please make sure you are logged into YouTube in this browser and refresh the page';
-            } else if (errorMessage.includes('Private video')) {
-                errorMessage = 'This is a private video and cannot be accessed';
-            }
-            
-            this.showNotification(`YouTube analysis failed: ${errorMessage}`, 'error');
-            
-            // NO FALLBACK TO BACKEND - YouTube backend doesn't work due to authentication
-        } finally {
-            this.hideLoading();
-        }
-    }
-
-    parseYouTubeFormats(formats) {
-        const uniqueFormats = [];
-        const seenHeights = new Set();
-
-        formats.forEach(format => {
-            if (format.height && !seenHeights.has(format.height)) {
-                seenHeights.add(format.height);
-                uniqueFormats.push({
-                    format_id: format.format_id,
-                    resolution: `${format.height}p`,
-                    height: format.height,
-                    filesize: format.contentLength ? this.formatFileSize(format.contentLength) : 'Unknown',
-                    format: `${format.height}p - ${format.qualityLabel || ''}`
-                });
-            }
-        });
-
-        // Add audio option
-        uniqueFormats.push({
-            format_id: 'audio',
-            resolution: 'Audio Only',
-            height: 0,
-            filesize: 'Unknown',
-            format: 'bestaudio'
-        });
-
-        return uniqueFormats.sort((a, b) => b.height - a.height);
     }
 
     async analyzeWithBackend(url) {
@@ -388,90 +304,8 @@ class JayDL {
         const quality = document.querySelector('#qualityOptions .option-btn.active')?.dataset.quality || 'best';
         const platform = this.currentMediaInfo.platform;
 
-        // YouTube: ALWAYS use client-side (no backend fallback)
-        if (platform === 'youtube') {
-            if (typeof ytdl !== 'undefined') {
-                await this.downloadYouTubeClientSide(url, mediaType, quality);
-            } else {
-                this.showNotification('YouTube download requires ytdl-core. Please refresh the page.', 'error');
-            }
-        } 
-        // All other platforms: Use backend
-        else {
-            await this.downloadWithBackend(url, quality, mediaType);
-        }
-    }
-
-    async downloadYouTubeClientSide(url, mediaType, quality) {
-        this.showLoading('Preparing YouTube download...');
-
-        try {
-            if (!ytdl.validateURL(url)) {
-                throw new Error('Invalid YouTube URL');
-            }
-
-            const videoInfo = await ytdl.getInfo(url);
-            
-            let format;
-            if (mediaType === 'audio') {
-                format = ytdl.chooseFormat(videoInfo.formats, {
-                    quality: 'highestaudio',
-                    filter: 'audioonly'
-                });
-            } else {
-                format = ytdl.chooseFormat(videoInfo.formats, {
-                    quality: quality === 'best' ? 'highest' : quality + 'p'
-                });
-            }
-
-            if (!format) {
-                throw new Error('No suitable format found');
-            }
-
-            // Create download link
-            const a = document.createElement('a');
-            a.href = format.url;
-            
-            // Set filename
-            const fileExtension = mediaType === 'audio' ? 'mp3' : 'mp4';
-            const fileName = this.sanitizeFilename(`${videoInfo.videoDetails.title}.${fileExtension}`);
-            a.download = fileName;
-            
-            // Trigger download
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-
-            this.hideLoading();
-            this.showSuccess('Download started!', 'Your YouTube video is now downloading.');
-
-            // Add to history
-            this.addToDownloadHistory({
-                title: videoInfo.videoDetails.title,
-                filename: fileName,
-                platform: 'youtube',
-                media_type: mediaType,
-                file_size: format.contentLength ? this.formatFileSize(format.contentLength) : 'Unknown',
-                timestamp: new Date().toISOString()
-            });
-
-        } catch (error) {
-            this.hideLoading();
-            console.error('YouTube download error:', error);
-            
-            let errorMessage = error.message;
-            if (errorMessage.includes('Sign in to confirm')) {
-                errorMessage = 'Please make sure you are logged into YouTube in this browser and refresh the page';
-            } else if (errorMessage.includes('format is not available')) {
-                errorMessage = 'The selected quality is not available for this video. Try "Best Available" quality.';
-            } else if (errorMessage.includes('Private video')) {
-                errorMessage = 'This is a private video and cannot be downloaded';
-            }
-            
-            this.showNotification(`YouTube download failed: ${errorMessage}`, 'error');
-            
-            // NO FALLBACK TO BACKEND - YouTube backend doesn't work due to authentication
-        }
+        // ALL platforms use backend now
+        await this.downloadWithBackend(url, quality, mediaType);
     }
 
     async downloadWithBackend(url, quality, mediaType) {
@@ -514,7 +348,7 @@ class JayDL {
 
     getEstimatedTime(platform) {
         const times = {
-            'youtube': 30,
+            'youtube': 45,
             'tiktok': 45,
             'instagram': 40,
             'twitter': 35,
@@ -662,7 +496,7 @@ class JayDL {
     async loadSupportedPlatforms() {
         try {
             const platforms = [
-                { name: 'YouTube', icon: '🎥', types: ['video', 'audio'], note: 'Client-side only (requires browser login)' },
+                { name: 'YouTube', icon: '🎥', types: ['video', 'audio'] },
                 { name: 'TikTok', icon: '📱', types: ['video'] },
                 { name: 'Instagram', icon: '📸', types: ['video', 'image'] },
                 { name: 'Twitter/X', icon: '🐦', types: ['video'] },
@@ -677,7 +511,6 @@ class JayDL {
                     <div style="font-size: 0.9em; color: #666;">
                         ${platform.types.join(', ')}
                     </div>
-                    ${platform.note ? `<div style="font-size: 0.8em; color: #667eea; margin-top: 5px;">${platform.note}</div>` : ''}
                 </div>
             `).join('');
         } catch (error) {

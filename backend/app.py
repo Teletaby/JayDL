@@ -1,75 +1,60 @@
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, render_template
 from flask_cors import CORS
+from downloader import JayDLDownloader
 import os
-import time
 import logging
-from utils.downloader import JayDLDownloader
+from datetime import datetime
 
-app = Flask(__name__)
-CORS(app)  # Enable CORS for all routes
-
-# Configuration for Render
-app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max file size
-
-# Initialize downloader with Render disk storage
-downloads_dir = os.path.join(os.path.dirname(__file__), 'downloads')
-os.makedirs(downloads_dir, exist_ok=True)
-downloader = JayDLDownloader(base_dir=downloads_dir)
-
-# Configure logging
+# Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+app = Flask(__name__)
+CORS(app)
+
+# Initialize downloader
+DOWNLOAD_DIR = os.path.join(os.path.dirname(__file__), 'downloads')
+downloader = JayDLDownloader(base_dir=DOWNLOAD_DIR)
+
 @app.route('/')
-def home():
-    return jsonify({
-        'message': 'JayDL API is running on Render',
-        'status': 'healthy',
-        'version': '1.0.0',
-        'environment': 'render'
-    })
+def index():
+    """Serve the main HTML page"""
+    return render_template('index.html')
 
-@app.route('/api/health', methods=['GET'])
-def health_check():
-    return jsonify({
-        'status': 'healthy', 
-        'message': 'JayDL API is running on Render',
-        'timestamp': time.time(),
-        'environment': 'render'
-    })
-
-@app.route('/ping', methods=['GET', 'HEAD'])
-def ping():
-    return '', 200
-
-@app.route('/api/status', methods=['GET'])
-def status_check():
-    return jsonify({
-        'status': 'healthy',
-        'environment': 'render',
-        'active': True
-    })
-
-@app.route('/api/info', methods=['POST'])
-def get_media_info():
-    """Get information about the media"""
+@app.route('/api/analyze', methods=['POST'])
+def analyze_media():
+    """Analyze a URL and return media information"""
     try:
         data = request.get_json()
         url = data.get('url')
         
         if not url:
-            return jsonify({'success': False, 'error': 'No URL provided'})
+            return jsonify({
+                'success': False,
+                'error': 'URL is required'
+            }), 400
         
-        info = downloader.get_video_info(url)
-        return jsonify(info)
+        logger.info(f"Analyzing URL: {url}")
         
+        result = downloader.get_video_info(url)
+        
+        if result['success']:
+            logger.info(f"Successfully analyzed: {result['title']}")
+        else:
+            logger.error(f"Analysis failed: {result['error']}")
+        
+        return jsonify(result)
+    
     except Exception as e:
-        logger.error(f"Info error: {e}")
-        return jsonify({'success': False, 'error': str(e)})
+        logger.error(f"Error in analyze_media: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'Server error: {str(e)}'
+        }), 500
 
 @app.route('/api/download', methods=['POST'])
 def download_media():
-    """Download media from provided URL"""
+    """Download media from URL"""
     try:
         data = request.get_json()
         url = data.get('url')
@@ -77,70 +62,134 @@ def download_media():
         media_type = data.get('media_type', 'video')
         
         if not url:
-            return jsonify({'success': False, 'error': 'No URL provided'})
+            return jsonify({
+                'success': False,
+                'error': 'URL is required'
+            }), 400
         
-        logger.info(f"Download request: {url} - Quality: {quality} - Type: {media_type}")
+        logger.info(f"Downloading: {url} | Quality: {quality} | Type: {media_type}")
         
-        result = downloader.download_media(url, quality, media_type)
+        result = downloader.download_media(url, quality=quality, media_type=media_type)
+        
+        if result['success']:
+            logger.info(f"Successfully downloaded: {result['title']}")
+            # Add download URL to result
+            result['download_url'] = f"/api/file/{result['filename']}"
+        else:
+            logger.error(f"Download failed: {result['error']}")
+        
         return jsonify(result)
-        
+    
     except Exception as e:
-        logger.error(f"Download error: {e}")
-        return jsonify({'success': False, 'error': str(e)})
+        logger.error(f"Error in download_media: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'Server error: {str(e)}'
+        }), 500
 
-@app.route('/api/downloaded-file/<filename>', methods=['GET'])
-def get_downloaded_file(filename):
-    """Serve downloaded files with proper headers and error handling"""
+@app.route('/api/file/<filename>', methods=['GET'])
+def serve_file(filename):
+    """Serve downloaded file"""
     try:
-        # Security check - prevent directory traversal
-        if '..' in filename or filename.startswith('/') or '/' in filename:
-            return jsonify({'success': False, 'error': 'Invalid filename'})
+        filepath = os.path.join(DOWNLOAD_DIR, filename)
         
-        # Check downloads directory
-        file_path = os.path.join(downloads_dir, filename)
+        if not os.path.exists(filepath):
+            return jsonify({
+                'success': False,
+                'error': 'File not found'
+            }), 404
         
-        if not os.path.exists(file_path):
-            print(f"File not found: {filename}")
-            return jsonify({'success': False, 'error': 'File not found on server'})
+        logger.info(f"Serving file: {filename}")
         
-        # Check if file is valid and has content
-        file_size = os.path.getsize(file_path)
-        print(f"File found: {file_path} ({file_size} bytes)")
-        
-        if file_size == 0:
-            print(f"File is empty: {filename}")
-            return jsonify({'success': False, 'error': 'File is empty (0 bytes)'})
-        
-        # Determine MIME type based on file extension
-        mimetype = 'application/octet-stream'
-        if filename.lower().endswith('.mp4'):
-            mimetype = 'video/mp4'
-        elif filename.lower().endswith('.mp3'):
-            mimetype = 'audio/mpeg'
-        elif filename.lower().endswith('.webm'):
-            mimetype = 'video/webm'
-        
-        print(f"Serving file: {filename} ({file_size} bytes) as {mimetype}")
-        
-        # Serve file with proper headers
-        response = send_file(
-            file_path,
+        return send_file(
+            filepath,
             as_attachment=True,
-            download_name=filename,
-            mimetype=mimetype
+            download_name=filename
         )
-        
-        # Add headers for better download handling
-        response.headers['Content-Length'] = file_size
-        response.headers['Cache-Control'] = 'no-cache'
-        response.headers['Accept-Ranges'] = 'bytes'
-        
-        return response
-            
+    
     except Exception as e:
-        logger.error(f"File serve error: {e}")
-        return jsonify({'success': False, 'error': f'Download failed: {str(e)}'})
+        logger.error(f"Error serving file: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'Server error: {str(e)}'
+        }), 500
+
+@app.route('/api/platforms', methods=['GET'])
+def get_platforms():
+    """Return list of supported platforms"""
+    platforms = [
+        {
+            'name': 'YouTube',
+            'icon': 'fab fa-youtube',
+            'color': '#FF0000',
+            'supported': True
+        },
+        {
+            'name': 'TikTok',
+            'icon': 'fab fa-tiktok',
+            'color': '#000000',
+            'supported': True
+        },
+        {
+            'name': 'Instagram',
+            'icon': 'fab fa-instagram',
+            'color': '#E4405F',
+            'supported': True
+        },
+        {
+            'name': 'Twitter/X',
+            'icon': 'fab fa-twitter',
+            'color': '#1DA1F2',
+            'supported': True
+        },
+        {
+            'name': 'Spotify',
+            'icon': 'fab fa-spotify',
+            'color': '#1DB954',
+            'supported': True
+        }
+    ]
+    
+    return jsonify({
+        'success': True,
+        'platforms': platforms
+    })
+
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    """Health check endpoint"""
+    return jsonify({
+        'success': True,
+        'status': 'healthy',
+        'timestamp': datetime.now().isoformat()
+    })
+
+# Cleanup old files periodically
+@app.before_request
+def cleanup_old_files():
+    """Clean up files older than 1 hour"""
+    try:
+        if not os.path.exists(DOWNLOAD_DIR):
+            return
+        
+        current_time = datetime.now().timestamp()
+        for filename in os.listdir(DOWNLOAD_DIR):
+            filepath = os.path.join(DOWNLOAD_DIR, filename)
+            
+            # Skip if not a file
+            if not os.path.isfile(filepath):
+                continue
+            
+            # Check file age
+            file_age = current_time - os.path.getmtime(filepath)
+            
+            # Delete if older than 1 hour
+            if file_age > 3600:
+                os.remove(filepath)
+                logger.info(f"Cleaned up old file: {filename}")
+    
+    except Exception as e:
+        logger.error(f"Error in cleanup: {str(e)}")
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    app.run(debug=True, host='0.0.0.0', port=5000)

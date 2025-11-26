@@ -14,117 +14,171 @@ class JayDLDownloader:
         """Ensure necessary directories exist"""
         os.makedirs(self.base_dir, exist_ok=True)
     
-    def get_video_info(self, url):
-        """Get information about the video"""
-        try:
-            ydl_opts = {
-                'quiet': True,
-                'no_warnings': True,
-            }
-            
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                
-                formats = []
-                if 'formats' in info:
-                    for fmt in info['formats']:
-                        if fmt.get('height'):
-                            formats.append({
-                                'format_id': fmt.get('format_id'),
-                                'resolution': f"{fmt.get('height')}p",
-                                'height': fmt.get('height'),
-                                'filesize': self.format_file_size(fmt.get('filesize')),
-                                'format': f"{fmt.get('height')}p - {fmt.get('format_note', '')}"
-                            })
-                
-                # Remove duplicates and sort by resolution
-                unique_formats = []
-                seen_resolutions = set()
-                for fmt in sorted(formats, key=lambda x: x['height'], reverse=True):
-                    if fmt['resolution'] not in seen_resolutions:
-                        seen_resolutions.add(fmt['resolution'])
-                        unique_formats.append(fmt)
-                
-                # Add audio option
-                unique_formats.append({
-                    'format_id': 'bestaudio',
-                    'resolution': 'Audio Only',
-                    'height': 0,
-                    'filesize': 'Unknown',
-                    'format': 'bestaudio'
-                })
-                
-                return {
-                    'success': True,
-                    'title': info.get('title', 'Unknown'),
-                    'duration': self.format_duration(info.get('duration')),
-                    'thumbnail': info.get('thumbnail'),
-                    'uploader': info.get('uploader', 'Unknown'),
-                    'view_count': info.get('view_count', 0),
-                    'formats': unique_formats,
-                    'platform': self.detect_platform(url)
+    def get_base_ydl_opts(self):
+        """Get base yt-dlp options optimized for public hosting"""
+        opts = {
+            'quiet': False,
+            'no_warnings': True,
+            # Use different player clients to avoid bot detection
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android', 'web'],
+                    'player_skip': ['webpage', 'configs'],
                 }
+            },
+            # Additional options to bypass restrictions
+            'nocheckcertificate': True,
+            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            # Retry options
+            'retries': 3,
+            'fragment_retries': 3,
+        }
+        
+        return opts
+    
+    def get_video_info(self, url):
+        """Get information about the video with multiple fallback strategies"""
+        strategies = [
+            {'player_client': ['android', 'web']},
+            {'player_client': ['ios', 'web']},
+            {'player_client': ['mweb', 'web']},
+        ]
+        
+        last_error = None
+        
+        for strategy in strategies:
+            try:
+                ydl_opts = self.get_base_ydl_opts()
+                ydl_opts['extractor_args']['youtube'] = strategy
                 
-        except Exception as e:
-            return {
-                'success': False,
-                'error': str(e)
-            }
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(url, download=False)
+                    
+                    formats = []
+                    if 'formats' in info:
+                        for fmt in info['formats']:
+                            if fmt.get('height'):
+                                formats.append({
+                                    'format_id': fmt.get('format_id'),
+                                    'resolution': f"{fmt.get('height')}p",
+                                    'height': fmt.get('height'),
+                                    'filesize': self.format_file_size(fmt.get('filesize')),
+                                    'format': f"{fmt.get('height')}p - {fmt.get('format_note', '')}"
+                                })
+                    
+                    # Remove duplicates and sort by resolution
+                    unique_formats = []
+                    seen_resolutions = set()
+                    for fmt in sorted(formats, key=lambda x: x['height'], reverse=True):
+                        if fmt['resolution'] not in seen_resolutions:
+                            seen_resolutions.add(fmt['resolution'])
+                            unique_formats.append(fmt)
+                    
+                    # Add audio option
+                    unique_formats.append({
+                        'format_id': 'bestaudio',
+                        'resolution': 'Audio Only',
+                        'height': 0,
+                        'filesize': 'Unknown',
+                        'format': 'bestaudio'
+                    })
+                    
+                    return {
+                        'success': True,
+                        'title': info.get('title', 'Unknown'),
+                        'duration': self.format_duration(info.get('duration')),
+                        'thumbnail': info.get('thumbnail'),
+                        'uploader': info.get('uploader', 'Unknown'),
+                        'view_count': info.get('view_count', 0),
+                        'formats': unique_formats,
+                        'platform': self.detect_platform(url)
+                    }
+            
+            except Exception as e:
+                last_error = str(e)
+                continue  # Try next strategy
+        
+        # All strategies failed
+        error_msg = last_error or "Unknown error"
+        if 'Sign in to confirm' in error_msg or 'bot' in error_msg.lower():
+            error_msg = "YouTube bot detection triggered. This video may be age-restricted or require authentication. Try another video."
+        
+        return {
+            'success': False,
+            'error': error_msg
+        }
     
     def download_media(self, url, quality='best', media_type='video'):
-        """Download media from URL"""
-        try:
-            # Configure yt-dlp options based on media type
-            ydl_opts = {
-                'outtmpl': os.path.join(self.base_dir, '%(title)s.%(ext)s'),
-                'quiet': False,
-            }
-            
-            if media_type == 'audio':
-                ydl_opts.update({
-                    'format': 'bestaudio/best',
-                    'postprocessors': [{
-                        'key': 'FFmpegExtractAudio',
-                        'preferredcodec': 'mp3',
-                        'preferredquality': '192',
-                    }],
-                })
-            else:
-                if quality == 'best':
-                    ydl_opts['format'] = 'best'
-                elif quality == 'audio':
-                    ydl_opts['format'] = 'bestaudio/best'
-                    ydl_opts['postprocessors'] = [{
-                        'key': 'FFmpegExtractAudio',
-                        'preferredcodec': 'mp3',
-                        'preferredquality': '192',
-                    }]
+        """Download media from URL with fallback strategies"""
+        strategies = [
+            {'player_client': ['android', 'web']},
+            {'player_client': ['ios', 'web']},
+            {'player_client': ['mweb', 'web']},
+        ]
+        
+        last_error = None
+        
+        for strategy in strategies:
+            try:
+                # Configure yt-dlp options based on media type
+                ydl_opts = self.get_base_ydl_opts()
+                ydl_opts['extractor_args']['youtube'] = strategy
+                ydl_opts['outtmpl'] = os.path.join(self.base_dir, '%(title)s.%(ext)s')
+                
+                if media_type == 'audio':
+                    ydl_opts.update({
+                        'format': 'bestaudio/best',
+                        'postprocessors': [{
+                            'key': 'FFmpegExtractAudio',
+                            'preferredcodec': 'mp3',
+                            'preferredquality': '192',
+                        }],
+                    })
                 else:
-                    # For specific quality, try to get the best video with that resolution or lower
-                    ydl_opts['format'] = f'best[height<={quality.replace("p", "")}]'
+                    if quality == 'best':
+                        ydl_opts['format'] = 'best'
+                    elif quality == 'audio':
+                        ydl_opts['format'] = 'bestaudio/best'
+                        ydl_opts['postprocessors'] = [{
+                            'key': 'FFmpegExtractAudio',
+                            'preferredcodec': 'mp3',
+                            'preferredquality': '192',
+                        }]
+                    else:
+                        # For specific quality, try to get the best video with that resolution or lower
+                        ydl_opts['format'] = f'best[height<={quality.replace("p", "")}]'
+                
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(url, download=True)
+                    filename = ydl.prepare_filename(info)
+                    
+                    # Handle audio extraction
+                    if media_type == 'audio' or quality == 'audio':
+                        filename = filename.rsplit('.', 1)[0] + '.mp3'
+                    
+                    return {
+                        'success': True,
+                        'title': info.get('title', 'Unknown'),
+                        'filename': os.path.basename(filename),
+                        'filepath': filename,
+                        'file_size': self.format_file_size(os.path.getsize(filename)),
+                        'platform': self.detect_platform(url),
+                        'media_type': media_type
+                    }
             
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                filename = ydl.prepare_filename(info)
-                
-                # Handle audio extraction
-                if media_type == 'audio' or quality == 'audio':
-                    filename = filename.rsplit('.', 1)[0] + '.mp3'
-                
-                return {
-                    'success': True,
-                    'title': info.get('title', 'Unknown'),
-                    'filename': os.path.basename(filename),
-                    'file_size': self.format_file_size(os.path.getsize(filename)),
-                    'platform': self.detect_platform(url),
-                    'media_type': media_type
-                }
-                
-        except Exception as e:
-            return {
-                'success': False,
-                'error': str(e)
-            }
+            except Exception as e:
+                last_error = str(e)
+                continue  # Try next strategy
+        
+        # All strategies failed
+        error_msg = last_error or "Unknown error"
+        if 'Sign in to confirm' in error_msg or 'bot' in error_msg.lower():
+            error_msg = "YouTube bot detection triggered. This video may be age-restricted. Try another video."
+        
+        return {
+            'success': False,
+            'error': error_msg
+        }
     
     def detect_platform(self, url):
         """Detect the platform from URL"""

@@ -8,14 +8,12 @@ class JayDL {
         this.loadSupportedPlatforms();
         this.loadDownloadHistory();
         
-        console.log(`JayDL running in ${this.isProduction() ? 'PRODUCTION' : 'DEVELOPMENT'} mode`);
-        console.log(`API Base: ${this.apiBase}`);
+        console.log(`JayDL running - API Base: ${this.apiBase}`);
         
-        if (this.isProduction()) {
-            this.startKeepAlive();
-        }
-        
-        this.testBackendConnection();
+        // Test backend connection after a short delay
+        setTimeout(() => {
+            this.testBackendConnection();
+        }, 1000);
     }
 
     getApiBaseUrl() {
@@ -26,19 +24,38 @@ class JayDL {
             return 'http://localhost:5000/api';
         }
         
-        // Production - Render
-        if (hostname.includes('.onrender.com')) {
-            // If we're on the frontend domain, use the backend service URL
-            const currentUrl = window.location.hostname;
-            if (currentUrl.includes('jaydl-frontend')) {
-                return 'https://jaydl-backend.onrender.com/api';
+        // Production - Your Render backend
+        return 'https://jaydl-1.onrender.com/api';
+    }
+
+    async testBackendConnection() {
+        try {
+            console.log('Testing backend connection to:', this.apiBase);
+            
+            const response = await fetch(`${this.apiBase}/health`, {
+                method: 'GET',
+                headers: {
+                    'Content-Type': 'application/json',
+                }
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
             }
-            // If we're directly on backend, use relative paths
-            return '/api';
+            
+            const data = await response.json();
+            console.log('Backend connection successful:', data);
+            this.showNotification('Connected to download service', 'success');
+            
+        } catch (error) {
+            console.error('Backend connection failed:', error);
+            console.log('API Base URL being used:', this.apiBase);
+            
+            // Don't show error if we're in development mode
+            if (this.isProduction()) {
+                this.showNotification('Backend server not running. Some platforms may not work.', 'error');
+            }
         }
-        
-        // Fallback (for custom domains)
-        return 'https://jaydl-backend.onrender.com/api';
     }
 
     isProduction() {
@@ -71,18 +88,6 @@ class JayDL {
                 if (e.target === modal) this.closeModal();
             });
         });
-    }
-
-    async testBackendConnection() {
-        try {
-            const response = await fetch(`${this.apiBase}/health`);
-            const data = await response.json();
-            console.log('Backend connection:', data.status);
-            this.showNotification('Connected to download service', 'success');
-        } catch (error) {
-            console.error('Backend connection failed:', error);
-            this.showNotification('Backend server not running. Some platforms may not work.', 'error');
-        }
     }
 
     startKeepAlive() {
@@ -253,6 +258,8 @@ class JayDL {
         this.showLoading('Analyzing URL...');
 
         try {
+            console.log('Sending request to:', `${this.apiBase}/info`);
+            
             const response = await fetch(`${this.apiBase}/info`, {
                 method: 'POST',
                 headers: {
@@ -260,6 +267,10 @@ class JayDL {
                 },
                 body: JSON.stringify({ url })
             });
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
 
             const data = await response.json();
 
@@ -271,6 +282,7 @@ class JayDL {
                 throw new Error(data.error || 'Failed to analyze URL');
             }
         } catch (error) {
+            console.error('Analysis failed:', error);
             this.showNotification(`Analysis failed: ${error.message}`, 'error');
         } finally {
             this.hideLoading();
@@ -454,6 +466,8 @@ class JayDL {
         this.showLoading('Starting download...', this.getEstimatedTime(this.currentMediaInfo.platform));
 
         try {
+            console.log('Sending download request to:', `${this.apiBase}/download`);
+            
             const response = await fetch(`${this.apiBase}/download`, {
                 method: 'POST',
                 headers: {
@@ -466,6 +480,10 @@ class JayDL {
                 })
             });
 
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+
             const data = await response.json();
 
             if (data.success) {
@@ -475,6 +493,7 @@ class JayDL {
                 throw new Error(data.error || 'Download failed');
             }
         } catch (error) {
+            console.error('Download failed:', error);
             this.showNotification(`Download failed: ${error.message}`, 'error');
         } finally {
             this.hideLoading();
@@ -518,7 +537,10 @@ class JayDL {
         try {
             this.showLoading('Preparing download...');
             
-            const response = await fetch(`${this.apiBase}/downloaded-file/${filename}`);
+            const downloadUrl = `${this.apiBase}/downloaded-file/${filename}`;
+            console.log('Downloading file from:', downloadUrl);
+            
+            const response = await fetch(downloadUrl);
             
             if (!response.ok) {
                 const errorData = await response.json();

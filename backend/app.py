@@ -32,8 +32,6 @@ class RapidAPIDownloader:
     def get_video_info(self, url):
         """Get video information using RapidAPI"""
         try:
-            logger.info(f"Calling RapidAPI for: {url}")
-            
             # Prepare the request
             payload = {
                 'url': url
@@ -45,13 +43,15 @@ class RapidAPIDownloader:
                 'Content-Type': 'application/x-www-form-urlencoded'
             }
             
+            logger.info(f"Calling RapidAPI for URL: {url}")
+            
             # Make API request
             response = requests.post(self.base_url, data=payload, headers=headers, timeout=30)
             logger.info(f"RapidAPI response status: {response.status_code}")
             
             if response.status_code == 200:
                 data = response.json()
-                logger.info(f"RapidAPI response keys: {list(data.keys()) if isinstance(data, dict) else 'Not a dict'}")
+                logger.info(f"RapidAPI response received")
                 return self._parse_api_response(data, url)
             else:
                 error_msg = f"API returned status {response.status_code}"
@@ -87,7 +87,7 @@ class RapidAPIDownloader:
                                     'format_id': quality,
                                     'resolution': quality.upper(),
                                     'height': self._get_height_from_quality(quality),
-                                    'filesize': self.format_file_size(info.get('filesize')),
+                                    'filesize': 'Unknown',
                                     'format': f"{quality.upper()} - Video",
                                     'type': 'video',
                                     'url': info['url']
@@ -99,7 +99,7 @@ class RapidAPIDownloader:
                         'format_id': 'audio',
                         'resolution': 'Audio',
                         'height': 0,
-                        'filesize': self.format_file_size(data['audio'].get('filesize')),
+                        'filesize': 'Unknown',
                         'format': 'Audio Only',
                         'type': 'audio',
                         'url': data['audio']['url']
@@ -129,12 +129,16 @@ class RapidAPIDownloader:
                     'error': 'Unexpected API response format'
                 }
             
-            # If no formats found, return error
+            # If no formats found, create a default option
             if not formats:
-                return {
-                    'success': False,
-                    'error': 'No download formats available for this video'
-                }
+                formats.append({
+                    'format_id': 'best',
+                    'resolution': 'Best Quality',
+                    'height': 1080,
+                    'filesize': 'Unknown',
+                    'format': 'Best Available Quality',
+                    'type': 'video'
+                })
             
             return {
                 'success': True,
@@ -181,21 +185,19 @@ class RapidAPIDownloader:
                             break
                 else:
                     # Look for specific quality
-                    target_quality = quality.lower().replace('p', '')
                     for fmt in info_result['formats']:
-                        fmt_quality = str(fmt.get('height', ''))
-                        if fmt_quality == target_quality or fmt.get('resolution', '').lower() == quality.lower():
+                        if fmt.get('resolution', '').lower() == quality.lower():
                             download_url = fmt.get('url')
                             format_info = fmt
                             break
             
+            # Fallback to first available format
+            if not download_url and info_result['formats']:
+                download_url = info_result['formats'][0].get('url')
+                format_info = info_result['formats'][0]
+            
             if not download_url:
-                # Fallback to first available format
-                if info_result['formats']:
-                    download_url = info_result['formats'][0].get('url')
-                    format_info = info_result['formats'][0]
-                else:
-                    return {'success': False, 'error': 'No download URL found'}
+                return {'success': False, 'error': 'No download URL found for requested format'}
             
             # Download the file
             filename = self._download_file(download_url, info_result['title'], media_type)
@@ -283,7 +285,7 @@ def index():
     """API status page"""
     return jsonify({
         'success': True,
-        'message': 'JayDL Backend API is running (RapidAPI)',
+        'message': 'JayDL Backend API is running',
         'version': '1.0',
         'timestamp': datetime.now().isoformat(),
         'endpoints': {
@@ -310,7 +312,7 @@ def analyze_media():
         if not url.startswith(('http://', 'https://')):
             return jsonify({'success': False, 'error': 'Invalid URL format'}), 400
         
-        logger.info(f"Analyzing URL via RapidAPI: {url}")
+        logger.info(f"Analyzing URL: {url}")
         result = downloader.get_video_info(url)
         
         if result['success']:
@@ -342,13 +344,12 @@ def download_media():
         if not url:
             return jsonify({'success': False, 'error': 'URL is required'}), 400
         
-        logger.info(f"Downloading via RapidAPI: {url} | Quality: {quality} | Type: {media_type}")
+        logger.info(f"Downloading: {url} | Quality: {quality} | Type: {media_type}")
         
         result = downloader.download_media(url, quality=quality, media_type=media_type)
         
         if result['success']:
             logger.info(f"Successfully downloaded: {result['title']}")
-            # Add download URL to result
             result['download_url'] = f"/api/file/{result['filename']}"
         else:
             logger.error(f"Download failed: {result['error']}")

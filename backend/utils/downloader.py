@@ -13,8 +13,8 @@ class RapidAPIDownloader:
         
         # Your RapidAPI credentials
         self.api_key = "aeOfcs43b0msh12c1ac12ff2064ep1009f9jsn43915272a236"
-        self.api_host = "all-media-downloaderl.p.rapidapi.com"
-        self.base_url = "https://all-media-downloaderl.p.rapidapi.com/all"
+        self.api_host = "all-media-downloader1.p.rapidapi.com"
+        self.base_url = f"https://{self.api_host}/all"
         
     def ensure_directories(self):
         os.makedirs(self.base_dir, exist_ok=True)

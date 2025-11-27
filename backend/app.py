@@ -3,6 +3,8 @@ from flask_cors import CORS
 import os
 import logging
 from datetime import datetime
+import requests
+import tempfile
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -11,13 +13,8 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 CORS(app)
 
-# Initialize RapidAPI downloader
+# Initialize downloader
 DOWNLOAD_DIR = os.path.join(os.path.dirname(__file__), 'downloads')
-
-# RapidAPI Downloader Class (integrated directly)
-import requests
-import tempfile
-from urllib.parse import urlparse
 
 class RapidAPIDownloader:
     def __init__(self, base_dir=None):
@@ -26,8 +23,8 @@ class RapidAPIDownloader:
         
         # Your RapidAPI credentials
         self.api_key = "aeOfcs43b0msh12c1ac12ff2064ep1009f9jsn43915272a236"
-        self.api_host = "all-media-downloaderl.p.rapidapi.com"
-        self.base_url = "https://all-media-downloaderl.p.rapidapi.com/all"
+        self.api_host = "all-media-downloader1.p.rapidapi.com"
+        self.base_url = f"https://{self.api_host}/all"
         
     def ensure_directories(self):
         os.makedirs(self.base_dir, exist_ok=True)
@@ -35,27 +32,35 @@ class RapidAPIDownloader:
     def get_video_info(self, url):
         """Get video information using RapidAPI"""
         try:
+            logger.info(f"Calling RapidAPI for: {url}")
+            
             # Prepare the request
-            payload = f"url={url}"
-            headers = {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'X-RapidAPI-Key': self.api_key,
-                'X-RapidAPI-Host': self.api_host
+            payload = {
+                'url': url
             }
             
-            logger.info(f"Calling RapidAPI for URL: {url}")
+            headers = {
+                'X-RapidAPI-Key': self.api_key,
+                'X-RapidAPI-Host': self.api_host,
+                'Content-Type': 'application/x-www-form-urlencoded'
+            }
             
             # Make API request
             response = requests.post(self.base_url, data=payload, headers=headers, timeout=30)
-            response_data = response.json()
-            
-            logger.info(f"RapidAPI response: {response.status_code}")
+            logger.info(f"RapidAPI response status: {response.status_code}")
             
             if response.status_code == 200:
-                return self._parse_api_response(response_data, url)
+                data = response.json()
+                logger.info(f"RapidAPI response keys: {list(data.keys()) if isinstance(data, dict) else 'Not a dict'}")
+                return self._parse_api_response(data, url)
             else:
-                error_msg = response_data.get('message', 'API request failed')
-                return {'success': False, 'error': f'API Error: {error_msg}'}
+                error_msg = f"API returned status {response.status_code}"
+                try:
+                    error_data = response.json()
+                    error_msg = error_data.get('message', error_msg)
+                except:
+                    pass
+                return {'success': False, 'error': error_msg}
                 
         except requests.exceptions.Timeout:
             return {'success': False, 'error': 'API request timed out'}
@@ -68,63 +73,78 @@ class RapidAPIDownloader:
     def _parse_api_response(self, data, original_url):
         """Parse the RapidAPI response"""
         try:
-            # Extract available formats
             formats = []
             
-            # Check for video formats
-            if data.get('video'):
-                video_data = data['video']
-                for quality, info in video_data.items():
-                    if isinstance(info, dict) and info.get('url'):
-                        formats.append({
-                            'format_id': quality,
-                            'resolution': quality.upper(),
-                            'height': self._get_height_from_quality(quality),
-                            'filesize': 'Unknown',
-                            'format': f"{quality.upper()} - Video",
-                            'type': 'video',
-                            'url': info['url']
-                        })
+            # Handle different response structures
+            if isinstance(data, dict):
+                # Check for video formats
+                if data.get('video'):
+                    video_data = data['video']
+                    if isinstance(video_data, dict):
+                        for quality, info in video_data.items():
+                            if isinstance(info, dict) and info.get('url'):
+                                formats.append({
+                                    'format_id': quality,
+                                    'resolution': quality.upper(),
+                                    'height': self._get_height_from_quality(quality),
+                                    'filesize': self.format_file_size(info.get('filesize')),
+                                    'format': f"{quality.upper()} - Video",
+                                    'type': 'video',
+                                    'url': info['url']
+                                })
+                
+                # Check for audio format
+                if data.get('audio') and isinstance(data['audio'], dict) and data['audio'].get('url'):
+                    formats.append({
+                        'format_id': 'audio',
+                        'resolution': 'Audio',
+                        'height': 0,
+                        'filesize': self.format_file_size(data['audio'].get('filesize')),
+                        'format': 'Audio Only',
+                        'type': 'audio',
+                        'url': data['audio']['url']
+                    })
+                
+                # Check for direct download URL
+                if not formats and data.get('download_url'):
+                    formats.append({
+                        'format_id': 'default',
+                        'resolution': 'Best',
+                        'height': 1080,
+                        'filesize': 'Unknown',
+                        'format': 'Best Quality',
+                        'type': 'video',
+                        'url': data['download_url']
+                    })
+                
+                # Get basic info
+                title = data.get('title', 'Unknown Title')
+                thumbnail = data.get('thumbnail')
+                duration = data.get('duration', 'Unknown')
+                uploader = data.get('author', data.get('uploader', 'Unknown'))
+                
+            else:
+                return {
+                    'success': False,
+                    'error': 'Unexpected API response format'
+                }
             
-            # Check for audio format
-            if data.get('audio') and data['audio'].get('url'):
-                formats.append({
-                    'format_id': 'audio',
-                    'resolution': 'Audio',
-                    'height': 0,
-                    'filesize': 'Unknown',
-                    'format': 'Audio Only',
-                    'type': 'audio',
-                    'url': data['audio']['url']
-                })
-            
-            # If no specific formats, create a default one
-            if not formats and data.get('download_url'):
-                formats.append({
-                    'format_id': 'default',
-                    'resolution': 'Best',
-                    'height': 1080,
-                    'filesize': 'Unknown',
-                    'format': 'Best Quality',
-                    'type': 'video',
-                    'url': data['download_url']
-                })
-            
-            # Get basic info
-            title = data.get('title', 'Unknown Title')
-            thumbnail = data.get('thumbnail')
-            duration = data.get('duration', 'Unknown')
+            # If no formats found, return error
+            if not formats:
+                return {
+                    'success': False,
+                    'error': 'No download formats available for this video'
+                }
             
             return {
                 'success': True,
                 'title': title,
                 'duration': duration,
                 'thumbnail': thumbnail,
-                'uploader': data.get('author', 'Unknown'),
-                'view_count': 0,
+                'uploader': uploader,
+                'view_count': data.get('view_count', 0),
                 'formats': formats,
-                'platform': self.detect_platform(original_url),
-                'api_data': data
+                'platform': self.detect_platform(original_url)
             }
             
         except Exception as e:
@@ -161,17 +181,24 @@ class RapidAPIDownloader:
                             break
                 else:
                     # Look for specific quality
+                    target_quality = quality.lower().replace('p', '')
                     for fmt in info_result['formats']:
-                        if fmt.get('resolution', '').lower() == quality.lower():
+                        fmt_quality = str(fmt.get('height', ''))
+                        if fmt_quality == target_quality or fmt.get('resolution', '').lower() == quality.lower():
                             download_url = fmt.get('url')
                             format_info = fmt
                             break
             
             if not download_url:
-                return {'success': False, 'error': 'No download URL found for requested format'}
+                # Fallback to first available format
+                if info_result['formats']:
+                    download_url = info_result['formats'][0].get('url')
+                    format_info = info_result['formats'][0]
+                else:
+                    return {'success': False, 'error': 'No download URL found'}
             
             # Download the file
-            filename = self._download_file(download_url, info_result['title'])
+            filename = self._download_file(download_url, info_result['title'], media_type)
             
             if filename:
                 return {
@@ -185,26 +212,28 @@ class RapidAPIDownloader:
                     'quality': format_info.get('resolution', 'Unknown') if format_info else 'Unknown'
                 }
             else:
-                return {'success': False, 'error': 'Failed to download file'}
+                return {'success': False, 'error': 'Failed to download file from RapidAPI'}
                 
         except Exception as e:
             logger.error(f"Download error: {str(e)}")
             return {'success': False, 'error': f'Download failed: {str(e)}'}
     
-    def _download_file(self, download_url, title):
-        """Download file from URL"""
+    def _download_file(self, download_url, title, media_type):
+        """Download file from RapidAPI URL"""
         try:
             # Clean filename
             clean_title = "".join(c for c in title if c.isalnum() or c in (' ', '-', '_')).rstrip()
-            filename = os.path.join(self.base_dir, f"{clean_title}.mp4")
+            file_extension = '.mp3' if media_type == 'audio' else '.mp4'
+            filename = os.path.join(self.base_dir, f"{clean_title}{file_extension}")
             
-            # Download with progress
+            # Download the file
             response = requests.get(download_url, stream=True, timeout=60)
             response.raise_for_status()
             
             with open(filename, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
+                    if chunk:
+                        f.write(chunk)
             
             return filename
             
@@ -216,9 +245,11 @@ class RapidAPIDownloader:
         """Extract height from quality string"""
         quality_map = {
             '144p': 144, '240p': 240, '360p': 360, '480p': 480,
-            '720p': 720, '1080p': 1080, '1440p': 1440, '2160p': 2160
+            '720p': 720, '1080p': 1080, '1440p': 1440, '2160p': 2160,
+            '144': 144, '240': 240, '360': 360, '480': 480,
+            '720': 720, '1080': 1080, '1440': 1440, '2160': 2160
         }
-        return quality_map.get(quality.lower(), 0)
+        return quality_map.get(quality.lower().replace('p', ''), 0)
     
     def detect_platform(self, url):
         url_lower = url.lower()
@@ -268,16 +299,18 @@ def analyze_media():
     """Analyze a URL and return media information"""
     try:
         data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'error': 'No data received'}), 400
+            
         url = data.get('url')
-        
         if not url:
-            return jsonify({
-                'success': False,
-                'error': 'URL is required'
-            }), 400
+            return jsonify({'success': False, 'error': 'URL is required'}), 400
+        
+        # Basic URL validation
+        if not url.startswith(('http://', 'https://')):
+            return jsonify({'success': False, 'error': 'Invalid URL format'}), 400
         
         logger.info(f"Analyzing URL via RapidAPI: {url}")
-        
         result = downloader.get_video_info(url)
         
         if result['success']:
@@ -291,7 +324,7 @@ def analyze_media():
         logger.error(f"Error in analyze_media: {str(e)}")
         return jsonify({
             'success': False,
-            'error': f'Server error: {str(e)}'
+            'error': 'Server error. Please try again.'
         }), 500
 
 @app.route('/api/download', methods=['POST'])
@@ -299,15 +332,15 @@ def download_media():
     """Download media from URL"""
     try:
         data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'error': 'No data received'}), 400
+            
         url = data.get('url')
         quality = data.get('quality', 'best')
         media_type = data.get('media_type', 'video')
         
         if not url:
-            return jsonify({
-                'success': False,
-                'error': 'URL is required'
-            }), 400
+            return jsonify({'success': False, 'error': 'URL is required'}), 400
         
         logger.info(f"Downloading via RapidAPI: {url} | Quality: {quality} | Type: {media_type}")
         

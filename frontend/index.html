@@ -161,10 +161,6 @@
             </div>
             <p class="navbar-subtitle">Download videos and music from various platforms</p>
             <div class="navbar-right">
-                <button class="navbar-auth-btn" id="authBtn" title="Sign in with Google">
-                    <i class="fab fa-google"></i>
-                    <span id="authBtnText">Sign In</span>
-                </button>
                 <button class="navbar-chat-btn" id="chatBtn" title="Open Chatbot">
                     <i class="fas fa-comments"></i>
                 </button>
@@ -993,6 +989,49 @@
         function closeChatbot() {
             document.getElementById('chatbotModal').classList.add('hidden');
         }
+
+        // =============== COOKIE CONSENT ===============
+        function showCookieConsent() {
+            const consent = localStorage.getItem('cookieConsent');
+            if (!consent) {
+                document.getElementById('cookieConsent').style.display = 'block';
+            }
+        }
+
+        function acceptCookies() {
+            localStorage.setItem('cookieConsent', 'accepted');
+            localStorage.setItem('cookieConsentDate', new Date().toISOString());
+            document.getElementById('cookieConsent').style.display = 'none';
+        }
+
+        function rejectCookies() {
+            localStorage.setItem('cookieConsent', 'rejected');
+            document.getElementById('cookieConsent').style.display = 'none';
+        }
+
+        // Show cookie consent on page load if not already accepted/rejected
+        window.addEventListener('load', showCookieConsent);
     </script>
+
+    <!-- Cookie Consent Banner -->
+    <div id="cookieConsent" class="cookie-consent" style="display: none;">
+        <div class="cookie-content">
+            <div class="cookie-message">
+                <h3><i class="fas fa-cookie"></i> Cookie & Analytics Notice</h3>
+                <p>We use cookies to remember your preferences and improve your experience. By clicking "Agree", you consent to our use of cookies for analytics and site functionality.</p>
+                <p class="cookie-details">
+                    <strong>What we track:</strong> Download preferences, video quality selections, language settings, and site usage analytics.
+                </p>
+                <div class="cookie-links">
+                    <a href="/privacy" target="_blank">Privacy Policy</a> • 
+                    <a href="/terms" target="_blank">Terms of Service</a>
+                </div>
+            </div>
+            <div class="cookie-buttons">
+                <button class="cookie-btn-reject" onclick="rejectCookies()">Decline</button>
+                <button class="cookie-btn-accept" onclick="acceptCookies()">Agree</button>
+            </div>
+        </div>
+    </div>
 </body>
 </html>

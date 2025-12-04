@@ -17,7 +17,6 @@ from googleapiclient.errors import HttpError
 import json
 from urllib.parse import urlencode
 import secrets
-import redis
 from functools import wraps
 
 # Load environment variables

@@ -651,40 +651,91 @@
         }
         
         function enableYouTubeAuth() {
-            // Use Google OAuth to get credentials
-            const clientId = ''; // This would be your Google OAuth client ID
-            
-            // For now, show instructions for users to enable YouTube downloads
-            const message = `
-YouTube Authentication Required
+            // Ask user for permission to collect YouTube cookies
+            const permission = confirm(`🔐 YouTube Authentication Required
 
-To enable YouTube downloads, follow these steps:
+JayDL would like to collect your YouTube session cookies to enable video downloads.
 
-1. Go to https://www.youtube.com and log in
-2. Open your browser's Developer Tools (F12)
-3. Go to the "Application" tab
-4. Find "Cookies" > "https://www.youtube.com"
-5. Find the cookie named "__Secure-1PSID" and copy its value
-6. Paste it here and click "Authorize"
+This allows us to:
+✓ Download YouTube videos without bot detection
+✓ Bypass authentication requirements
+✓ Provide seamless downloads for everyone
 
-(In the future, this will be automatic)
-            `;
+Your cookies are stored only in your browser and never shared.
+
+Do you want to enable YouTube downloads?`);
             
-            const userCookie = prompt(message.trim(), '');
-            
-            if (!userCookie || userCookie.trim() === '') {
-                alert('YouTube authentication cancelled');
+            if (!permission) {
                 return;
             }
             
-            // Send cookies to backend
+            // Try to collect cookies using Cookie Store API
+            collectYouTubeCookies();
+        }
+        
+        async function collectYouTubeCookies() {
+            try {
+                // Check if Cookie Store API is available
+                if (!navigator.cookieStore) {
+                    // Fallback: Ask user to manually provide cookies
+                    manualCookieCollection();
+                    return;
+                }
+                
+                // Request permission to access cookies
+                try {
+                    // Get all cookies for youtube.com
+                    const cookies = await navigator.cookieStore.getAll({
+                        name: '__Secure-1PSID',
+                        url: 'https://www.youtube.com'
+                    });
+                    
+                    if (cookies && cookies.length > 0) {
+                        const cookieValue = cookies[0].value;
+                        sendCookiesToBackend(cookieValue);
+                    } else {
+                        // No cookies found, ask user to open YouTube first
+                        alert('No YouTube cookies found.\n\nPlease:\n1. Open YouTube.com in another tab\n2. Log in to your YouTube account\n3. Come back and click "Enable YouTube Downloads" again');
+                    }
+                } catch (e) {
+                    console.log('Cookie Store API error:', e);
+                    manualCookieCollection();
+                }
+            } catch (error) {
+                console.error('Error collecting cookies:', error);
+                manualCookieCollection();
+            }
+        }
+        
+        function manualCookieCollection() {
+            // Fallback to manual cookie collection
+            const instructions = `
+Your browser doesn't support automatic cookie collection.
+
+Please follow these steps:
+
+1. Open YouTube.com and make sure you're logged in
+2. Press F12 to open Developer Tools
+3. Go to "Application" tab
+4. Click "Cookies" → "https://www.youtube.com"
+5. Find the cookie "__Secure-1PSID" and copy its value
+6. Paste it below:
+            `.trim();
+            
+            const cookie = prompt(instructions);
+            if (cookie && cookie.trim()) {
+                sendCookiesToBackend(cookie.trim());
+            }
+        }
+        
+        function sendCookiesToBackend(cookieValue) {
             fetch(API_BASE + '/api/set-cookies', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
-                    cookies: userCookie.trim()
+                    cookies: cookieValue
                 })
             })
             .then(res => res.json())
@@ -692,13 +743,13 @@ To enable YouTube downloads, follow these steps:
                 if (data.success) {
                     localStorage.setItem('yt_authenticated', 'true');
                     document.getElementById('ytAuthBtn').classList.add('authenticated');
-                    alert('✓ YouTube authentication successful! You can now download YouTube videos.');
+                    alert('✓ YouTube authentication successful!\n\nYou can now download YouTube videos.');
                 } else {
-                    alert('✗ Authentication failed: ' + data.error);
+                    alert('✗ Authentication failed:\n' + data.error);
                 }
             })
             .catch(err => {
-                alert('✗ Error: ' + err.message);
+                alert('✗ Error connecting to server:\n' + err.message);
             });
         }
         

@@ -567,18 +567,36 @@
         }
         
         async function enableYouTubeAuth() {
-            const permission = confirm(`🔐 YouTube Authentication
+            showLoading('Checking for YouTube session...');
+            
+            // Try to collect cookies directly first
+            try {
+                const cookies = await getAllCookies();
+                const youtubeCookies = cookies.filter(c => 
+                    c.domain.includes('youtube.com') || c.domain.includes('.google.com')
+                );
+                
+                if (youtubeCookies.length > 5) {
+                    // Already have YouTube cookies, use them directly
+                    hideLoading();
+                    showLoading('Authenticating with YouTube...');
+                    const cookieString = youtubeCookies.map(c => `${c.name}=${c.value}`).join('; ');
+                    await sendCookiesToBackend(cookieString);
+                    return;
+                }
+            } catch (e) {
+                console.log('Direct cookie check failed:', e);
+            }
+            
+            // No cookies found, need to open YouTube
+            hideLoading();
+            const permission = confirm(`🔐 YouTube Authentication Required
 
-JayDL needs to access YouTube to enable downloads.
+JayDL needs access to YouTube cookies to download videos.
 
-This will:
-✓ Open YouTube in a new window
-✓ Automatically collect your session
-✓ Enable YouTube downloads
+Click OK to open YouTube briefly. Once you see YouTube load, you can close the window.
 
-Your session stays local in your browser.
-
-Continue with YouTube authentication?`);
+Your session stays in your browser only.`);
             
             if (!permission) {
                 return;
@@ -588,17 +606,71 @@ Continue with YouTube authentication?`);
         }
         
         async function authenticateYouTube() {
-            showLoading('Opening YouTube for authentication...');
+            showLoading('Loading YouTube...');
+            
+            // Create invisible iframe to load YouTube silently
+            const iframe = document.getElementById('ytAuthFrame');
+            iframe.src = 'https://www.youtube.com';
+            
+            let checkCount = 0;
+            const maxChecks = 15; // 30 seconds
+            
+            const checkInterval = setInterval(async () => {
+                checkCount++;
+                
+                try {
+                    const cookies = await getAllCookies();
+                    const youtubeCookies = cookies.filter(c => 
+                        c.domain.includes('youtube.com') || c.domain.includes('.google.com')
+                    );
+                    
+                    if (youtubeCookies.length > 5) {
+                        clearInterval(checkInterval);
+                        iframe.src = 'about:blank';
+                        
+                        hideLoading();
+                        showLoading('Authenticating...');
+                        
+                        const cookieString = youtubeCookies.map(c => `${c.name}=${c.value}`).join('; ');
+                        await sendCookiesToBackend(cookieString);
+                        return;
+                    }
+                } catch (e) {
+                    console.log('Cookie check error:', e);
+                }
+                
+                if (checkCount >= maxChecks) {
+                    clearInterval(checkInterval);
+                    iframe.src = 'about:blank';
+                    hideLoading();
+                    
+                    // If iframe method fails, try popup as fallback
+                    authenticateYouTubePopup();
+                }
+            }, 2000);
+        }
+        
+        async function authenticateYouTubePopup() {
+            const permission = confirm(`YouTube authentication requires you to visit YouTube.
+
+Click OK to open YouTube in a new window. Make sure you're logged in, then close the window.`);
+            
+            if (!permission) {
+                showError('YouTube authentication cancelled.');
+                return;
+            }
+            
+            showLoading('Opening YouTube...');
             
             const youtubeWindow = window.open(
                 'https://www.youtube.com',
                 'yt_auth',
-                'width=800,height=600'
+                'width=600,height=500'
             );
             
             if (!youtubeWindow) {
                 hideLoading();
-                showError('Please allow popups for this site to enable YouTube downloads');
+                showError('Please allow popups for this site to enable YouTube downloads.');
                 return;
             }
             
@@ -611,8 +683,22 @@ Continue with YouTube authentication?`);
                 try {
                     if (youtubeWindow.closed) {
                         clearInterval(checkInterval);
-                        hideLoading();
-                        showError('Authentication cancelled. Please complete YouTube login next time.');
+                        
+                        // Check cookies one more time after window closes
+                        const cookies = await getAllCookies();
+                        const youtubeCookies = cookies.filter(c => 
+                            c.domain.includes('youtube.com') || c.domain.includes('.google.com')
+                        );
+                        
+                        if (youtubeCookies.length > 5) {
+                            hideLoading();
+                            showLoading('Authenticating...');
+                            const cookieString = youtubeCookies.map(c => `${c.name}=${c.value}`).join('; ');
+                            await sendCookiesToBackend(cookieString);
+                        } else {
+                            hideLoading();
+                            showError('No YouTube session found. Please make sure you\'re logged into YouTube.');
+                        }
                         return;
                     }
                     
@@ -626,11 +712,10 @@ Continue with YouTube authentication?`);
                         youtubeWindow.close();
                         
                         hideLoading();
-                        showLoading('Sending authentication to server...');
+                        showLoading('Authenticating...');
                         
                         const cookieString = youtubeCookies.map(c => `${c.name}=${c.value}`).join('; ');
                         await sendCookiesToBackend(cookieString);
-                        
                         return;
                     }
                 } catch (e) {
@@ -639,14 +724,17 @@ Continue with YouTube authentication?`);
                 
                 if (checkCount >= maxChecks) {
                     clearInterval(checkInterval);
-                    youtubeWindow.close();
+                    if (!youtubeWindow.closed) {
+                        youtubeWindow.close();
+                    }
                     hideLoading();
-                    showError('Authentication timeout. Please try again and make sure you\'re logged into YouTube.');
+                    showError('Authentication timeout. Please try again.');
                 }
             }, 2000);
         }
         
         async function getAllCookies() {
+            // Try Cookie Store API first (most reliable)
             if (navigator.cookieStore) {
                 try {
                     return await navigator.cookieStore.getAll();
@@ -655,6 +743,7 @@ Continue with YouTube authentication?`);
                 }
             }
             
+            // Fallback to document.cookie
             const cookies = [];
             const cookieString = document.cookie;
             if (cookieString) {

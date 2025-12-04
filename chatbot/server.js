@@ -1,5 +1,5 @@
 const express = require('express');
-const { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } = require('@google/generative-ai');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 const cors = require('cors');
 const session = require('express-session');
 require('dotenv').config();
@@ -18,13 +18,15 @@ app.use(session({
   cookie: { secure: false }
 }));
 
-const MODEL_NAME = "gemini-pro";
+const MODEL_NAME = "gemini-2.5-flash";
 const API_KEY = process.env.API_KEY;
 
 if (!API_KEY) {
   console.error('ERROR: API_KEY not found in environment variables');
   process.exit(1);
 }
+
+console.log('Using model:', MODEL_NAME);
 
 // System prompt for the chatbot
 const SYSTEM_PROMPT = `You are JayDL Assistant, a helpful AI chatbot for the JayDL media downloader platform. Your role is to:
@@ -33,94 +35,81 @@ const SYSTEM_PROMPT = `You are JayDL Assistant, a helpful AI chatbot for the Jay
 
 2. **Guide users on downloading**: Explain how to download from YouTube, TikTok, Instagram, Twitter, and Spotify using the JayDL platform.
 
-3. **Social Media Knowledge**: Share insights about what's trending on different platforms:
-   - YouTube: Trending videos, channels, and uploads
-   - TikTok: Viral sounds, dances, and challenges
-   - Instagram: Trending reels, stories, and content
-   - Twitter/X: Trending topics and discussions
-   - Spotify: Top playlists, artists, and songs
+3. **Social Media Knowledge**: Share insights about what's trending on different platforms.
 
 4. **Music Recommendations**: Suggest music based on user preferences, mood, or genre.
 
-5. **Technical Help**: Answer questions about JayDL features like:
-   - Different download formats (MP4, WebM, MP3)
-   - Quality options
-   - File sizes
-   - Platform support
+5. **Technical Help**: Answer questions about JayDL features.
 
-Be friendly, informative, and concise. If you don't know something, suggest the user check the platform directly or provide general guidance.
-
-Current date: ${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`;
+Be friendly, informative, and concise.`;
 
 // Function to run the chat
 async function runChat(userInput, sessionData) {
-  const genAI = new GoogleGenerativeAI(API_KEY);
-  const model = genAI.getGenerativeModel({ model: MODEL_NAME });
-
-  const generationConfig = {
-    temperature: 0.7,
-    topK: 40,
-    topP: 0.95,
-    maxOutputTokens: 1024,
-  };
-
-  const safetySettings = [
-    {
-      category: HarmCategory.HARM_CATEGORY_HARASSMENT,
-      threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-    },
-    {
-      category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-      threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-    },
-    {
-      category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-      threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-    },
-    {
-      category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-      threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-    }
-  ];
-
-  // Initialize chat history with system prompt
-  let chatHistory = sessionData.chatHistory || [];
-  
-  // Add system prompt if this is the first message
-  if (chatHistory.length === 0) {
-    chatHistory.push({
-      role: "user",
-      parts: [{ text: "You are " + SYSTEM_PROMPT }]
-    });
-    chatHistory.push({
-      role: "model",
-      parts: [{ text: "I understand! I'm JayDL Assistant. I'm here to help you with music trends, social media insights, and downloading media from various platforms. How can I help you today?" }]
-    });
-  }
-
-  let chat = model.startChat({
-    generationConfig,
-    safetySettings,
-    history: chatHistory
-  });
-
   try {
-    const result = await chat.sendMessage(userInput);
-    const response = result.response;
-    const responseText = response.text();
+    console.log('[Chat] Initializing Gemini API...');
+    
+    if (!API_KEY) {
+      throw new Error('API_KEY is not set. Check your .env file.');
+    }
+    
+    const genAI = new GoogleGenerativeAI(API_KEY);
+    console.log('[Chat] API client initialized');
+    
+    console.log('[Chat] Getting model:', MODEL_NAME);
+    const model = genAI.getGenerativeModel({ model: MODEL_NAME });
 
-    // Save updated chat history
-    sessionData.chatHistory = chat.history;
+    const generationConfig = {
+      temperature: 0.7,
+      topK: 40,
+      topP: 0.95,
+      maxOutputTokens: 1024,
+    };
+
+    console.log('[Chat] Starting chat session...');
+    const chat = model.startChat({
+      generationConfig,
+      history: []
+    });
+
+    console.log('[Chat] Sending message to API:', userInput.substring(0, 50) + '...');
+    const result = await chat.sendMessage(userInput);
+    
+    console.log('[Chat] Got response from API');
+    const response = result.response;
+    
+    if (!response) {
+      throw new Error('Empty response from Gemini API');
+    }
+    
+    const responseText = response.text();
+    console.log('[Chat] Response text retrieved successfully, length:', responseText.length);
 
     return {
       success: true,
       response: responseText
     };
   } catch (error) {
-    console.error('Error in chat:', error);
+    console.error('[Chat] Error occurred:', error.message);
+    console.error('[Chat] Error code:', error.code);
+    console.error('[Chat] Error status:', error.status);
+    
+    // Return a user-friendly error message
+    let errorMessage = error.message;
+    
+    if (error.message.includes('API_KEY')) {
+      errorMessage = 'Chatbot is not properly configured. Please check API credentials.';
+    } else if (error.message.includes('timeout')) {
+      errorMessage = 'Request took too long. Please try again.';
+    } else if (error.message.includes('429')) {
+      errorMessage = 'Too many requests. Please wait a moment and try again.';
+    } else if (error.message.includes('403')) {
+      errorMessage = 'API access denied. Please check your API key.';
+    }
+    
     return {
       success: false,
-      response: "I encountered an error processing your request. Please try again."
+      response: errorMessage,
+      error: 'Chat Error'
     };
   }
 }
@@ -136,29 +125,38 @@ app.get('/', (req, res) => {
   });
 });
 
+
 app.post('/chat', async (req, res) => {
   try {
+    console.log('Received chat request body:', JSON.stringify(req.body).substring(0, 100));
     const userInput = req.body?.userInput;
     
     if (!userInput) {
+      console.log('No userInput provided');
       return res.status(400).json({
         success: false,
         error: 'Invalid request body - userInput is required'
       });
     }
 
-    // Initialize chat history in session if not present
-    if (!req.session.chatHistory) {
-      req.session.chatHistory = [];
-    }
+    console.log('Processing message:', userInput.substring(0, 50) + '...');
+    
+    // Set a timeout for the chat request (25 seconds to leave room for network latency)
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('Chat request timeout - took too long to get response')), 25000)
+    );
+    
+    const chatPromise = runChat(userInput, req.session || {});
+    const result = await Promise.race([chatPromise, timeoutPromise]);
 
-    const result = await runChat(userInput, req.session);
-
+    console.log('Sending response - success:', result.success);
     res.json(result);
   } catch (error) {
-    console.error('Error in chat endpoint:', error);
+    console.error('Error in chat endpoint:', error.message);
+    console.error('Error details:', error);
     res.status(500).json({
       success: false,
+      response: error.message || 'Failed to get response from AI. Please try again.',
       error: 'Internal Server Error',
       message: error.message
     });

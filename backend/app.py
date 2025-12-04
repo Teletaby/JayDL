@@ -61,13 +61,16 @@ Session(app)
 # Google OAuth Configuration
 GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID')
 GOOGLE_CLIENT_SECRET = os.getenv('GOOGLE_CLIENT_SECRET')
-GOOGLE_REDIRECT_URI = os.getenv('GOOGLE_REDIRECT_URI', 'http://localhost:5000/api/oauth2callback')
 
-# For production, use environment-specific redirect URIs
-if os.getenv('FLASK_ENV') == 'production':
-    app.config['SESSION_COOKIE_SECURE'] = True
-    if not GOOGLE_REDIRECT_URI:
-        GOOGLE_REDIRECT_URI = 'https://jaydl-backend.onrender.com/api/oauth2callback'
+# Set redirect URI based on environment
+if os.getenv('FLASK_ENV') == 'production' or 'onrender' in os.getenv('RENDER_EXTERNAL_URL', ''):
+    GOOGLE_REDIRECT_URI = os.getenv('GOOGLE_REDIRECT_URI', 'https://jaydl-backend.onrender.com/api/oauth2callback')
+else:
+    GOOGLE_REDIRECT_URI = os.getenv('GOOGLE_REDIRECT_URI', 'http://localhost:5000/api/oauth2callback')
+
+# Ensure we have the required credentials
+if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+    logger.warning("Google OAuth credentials not configured. OAuth features will not work.")
 
 # Google API scopes for YouTube access
 SCOPES = [
@@ -1703,6 +1706,18 @@ def health_check():
         'timestamp': datetime.now().isoformat(),
         'oauth_configured': bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET),
         'session_active': is_authenticated()
+    })
+
+@app.route('/api/debug/oauth', methods=['GET'])
+def debug_oauth():
+    """Debug OAuth configuration (development only)"""
+    return jsonify({
+        'client_id_set': bool(GOOGLE_CLIENT_ID),
+        'client_id_length': len(GOOGLE_CLIENT_ID) if GOOGLE_CLIENT_ID else 0,
+        'client_secret_set': bool(GOOGLE_CLIENT_SECRET),
+        'client_secret_length': len(GOOGLE_CLIENT_SECRET) if GOOGLE_CLIENT_SECRET else 0,
+        'redirect_uri': GOOGLE_REDIRECT_URI,
+        'scopes': SCOPES
     })
 
 # Cleanup old files periodically in a background thread

@@ -417,7 +417,7 @@ class InvidiousDownloader:
             import json
             
             # Try to get video info from yt-dlp with longer timeout
-            cmd = ['yt-dlp', '--dump-json', '--no-warnings', f'https://www.youtube.com/watch?v={video_id}']
+            cmd = ['yt-dlp', '--dump-json', '--no-warnings', '--cookies-from-browser', 'chrome', f'https://www.youtube.com/watch?v={video_id}']
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)  # Increased from 10 to 30 seconds
             
             title = f'Video {video_id[:8]}...'
@@ -566,8 +566,8 @@ class InvidiousDownloader:
             import subprocess
             import json
             
-            # Get format information from yt-dlp
-            cmd = ['yt-dlp', '--dump-json', '--no-warnings', url]
+            # Get format information from yt-dlp with cookies
+            cmd = ['yt-dlp', '--dump-json', '--no-warnings', '--cookies-from-browser', 'chrome', url]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
             
             if result.returncode != 0:
@@ -755,56 +755,28 @@ class InvidiousDownloader:
             if platform == 'spotify':
                 return self._download_spotify(url, quality, media_type)
             
-            # For YouTube, check if user has OAuth credentials
-            if platform == 'youtube':
-                if user_credentials:
-                    # Try with OAuth credentials first
-                    logger.info("Using OAuth credentials for YouTube download")
-                    result = self._download_youtube_oauth(url, quality, media_type, user_credentials)
-                    if result.get('success'):
-                        return result
-                    logger.warning("OAuth download failed, falling back to Invidious")
-                
-                # Fallback to Invidious
-                return self._download_youtube_invidious(url, quality, media_type)
-            
-            # For other platforms, use standard yt-dlp
-            return self._download_generic(url, quality, media_type, platform)
+            # For all platforms, always try browser cookies first
+            return self._download_with_browser_cookies(url, quality, media_type, platform)
             
         except Exception as e:
             logger.error(f"Download error: {str(e)}", exc_info=True)
             return {'success': False, 'error': f'Download failed: {str(e)}'}
     
-    def _download_youtube_oauth(self, url, quality, media_type, credentials):
-        """Download YouTube video using OAuth credentials"""
+    def _download_with_browser_cookies(self, url, quality, media_type, platform):
+        """Download using browser cookies (main solution)"""
         try:
             import subprocess
             import json
-            import tempfile
             
-            logger.info(f"Downloading YouTube with OAuth (quality={quality}, type={media_type})")
+            logger.info(f"Downloading with browser cookies (platform={platform}, quality={quality}, type={media_type})")
             
-            # Create credentials file for yt-dlp
-            creds_dict = {
-                'token': credentials['token'],
-                'refresh_token': credentials.get('refresh_token'),
-                'token_uri': credentials['token_uri'],
-                'client_id': credentials.client_id,
-                'client_secret': credentials.client_secret,
-                'scopes': credentials.scopes
-            }
-            
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-                json.dump(creds_dict, f)
-                creds_file = f.name
-            
-            # Build yt-dlp command with OAuth
+            # Build yt-dlp command with browser cookies
             if media_type == 'audio':
                 output_template = os.path.join(self.base_dir, f'%(title)s__audio.%(ext)s')
                 cmd = [
                     'yt-dlp',
                     '--no-warnings',
-                    '--cookies-from-browser', 'chrome',  # Try to use browser cookies as fallback
+                    '--cookies-from-browser', 'chrome',  # This is the key - uses browser cookies
                     '-f', 'bestaudio',
                     '-x',
                     '--audio-format', 'mp3',
@@ -812,100 +784,10 @@ class InvidiousDownloader:
                     '-o', output_template,
                     url
                 ]
+                logger.info(f"Downloading audio from {platform}")
             else:
                 quality_map = {
-                    '1440': 'bestvideo[height<=1440]+bestaudio/best[height<=1440]/best',
-                    '1080': 'bestvideo[height<=1080]+bestaudio/best[height<=1080]/best',
-                    '720': 'bestvideo[height<=720]+bestaudio/best[height<=720]/best',
-                    '480': 'bestvideo[height<=480]+bestaudio/best[height<=480]/best',
-                    '360': 'bestvideo[height<=360]+bestaudio/best[height<=360]/best',
-                    'best': 'bestvideo+bestaudio/best'
-                }
-                format_spec = quality_map.get(quality, 'bestvideo+bestaudio/best')
-                output_template = os.path.join(self.base_dir, f'%(title)s__{quality}p.%(ext)s')
-                
-                cmd = [
-                    'yt-dlp',
-                    '--no-warnings',
-                    '--cookies-from-browser', 'chrome',
-                    '-f', format_spec,
-                    '-o', output_template,
-                    url
-                ]
-            
-            logger.info(f"Running yt-dlp with OAuth fallback")
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-            
-            # Clean up temp file
-            try:
-                os.remove(creds_file)
-            except:
-                pass
-            
-            if result.returncode == 0:
-                return self._process_download_result(result, url, platform='youtube', 
-                                                    media_type=media_type, quality=quality)
-            else:
-                error_msg = result.stderr[:500] if result.stderr else 'Unknown error'
-                logger.error(f"OAuth download failed: {error_msg}")
-                return {'success': False, 'error': 'Failed to download with OAuth'}
-                
-        except Exception as e:
-            logger.error(f"OAuth download error: {str(e)}", exc_info=True)
-            return {'success': False, 'error': f'OAuth download failed: {str(e)}'}
-    
-    def _download_generic(self, url, quality, media_type, platform):
-        """Download generic platform content"""
-        try:
-            import subprocess
-            import json
-            
-            # Build yt-dlp command based on format
-            if media_type == 'audio':
-                # Download as MP3 audio only with specified quality bitrate
-                audio_bitrate_map = {
-                    'bestaudio': '192',
-                    '192': '192',
-                    '128': '128'
-                }
-                audio_quality = audio_bitrate_map.get(quality, '192')
-                
-                output_template = os.path.join(self.base_dir, f'%(title)s__{audio_quality}kbps.%(ext)s')
-                
-                cmd = [
-                    'yt-dlp',
-                    '--no-warnings',
-                    '-f', 'bestaudio',
-                    '-x',
-                    '--audio-format', 'mp3',
-                    '--audio-quality', audio_quality,
-                    '-o', output_template,
-                    url
-                ]
-                
-                logger.info(f"Downloading audio ({audio_quality} kbps) from {platform}")
-                
-                # Execute download with bestaudio first
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-                
-                # If bestaudio fails, try downloading best video and extracting audio
-                if result.returncode != 0:
-                    logger.warning(f"bestaudio extraction failed, trying fallback")
-                    
-                    cmd = [
-                        'yt-dlp',
-                        '--no-warnings',
-                        '-f', 'best',
-                        '-x',
-                        '--audio-format', 'mp3',
-                        '--audio-quality', audio_quality,
-                        '-o', output_template,
-                        url
-                    ]
-                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-            else:
-                # Download as video with specified quality
-                quality_map = {
+                    '2160': 'bestvideo[height<=2160]+bestaudio/best[height<=2160]/best',
                     '1440': 'bestvideo[height<=1440]+bestaudio/best[height<=1440]/best',
                     '1080': 'bestvideo[height<=1080]+bestaudio/best[height<=1080]/best',
                     '720': 'bestvideo[height<=720]+bestaudio/best[height<=720]/best',
@@ -913,36 +795,65 @@ class InvidiousDownloader:
                     '360': 'bestvideo[height<=360]+bestaudio/best[height<=360]/best',
                     'mp4': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
                     'webm': 'bestvideo[ext=webm]+bestaudio[ext=webm]/best[ext=webm]/best',
-                    'best': 'bestvideo+bestaudio/best'
+                    'best': 'bestvideo+bestaudio/best',
+                    'bestaudio': 'bestaudio',
+                    '192': 'bestaudio',
+                    '128': 'bestaudio'
                 }
+                
                 format_spec = quality_map.get(quality, 'bestvideo+bestaudio/best')
                 
-                if quality == 'mp4':
-                    output_template = os.path.join(self.base_dir, f'%(title)s__mp4p.%(ext)s')
-                elif quality == 'webm':
-                    output_template = os.path.join(self.base_dir, f'%(title)s__webm.%(ext)s')
+                if quality in ['bestaudio', '192', '128']:
+                    output_template = os.path.join(self.base_dir, f'%(title)s__{quality}.%(ext)s')
+                    cmd = [
+                        'yt-dlp',
+                        '--no-warnings',
+                        '--cookies-from-browser', 'chrome',
+                        '-f', 'bestaudio',
+                        '-x',
+                        '--audio-format', 'mp3',
+                        '--audio-quality', quality if quality in ['192', '128'] else '192',
+                        '-o', output_template,
+                        url
+                    ]
                 else:
-                    output_template = os.path.join(self.base_dir, f'%(title)s__{quality}p.%(ext)s')
+                    output_template = os.path.join(self.base_dir, f'%(title)s__{quality}.%(ext)s')
+                    cmd = [
+                        'yt-dlp',
+                        '--no-warnings',
+                        '--cookies-from-browser', 'chrome',
+                        '-f', format_spec,
+                        '-o', output_template,
+                        url
+                    ]
                 
-                cmd = [
-                    'yt-dlp',
-                    '--no-warnings',
-                    '-f', format_spec,
-                    '-o', output_template,
-                    '--quiet',
-                    url
-                ]
                 logger.info(f"Downloading video {quality} from {platform}")
             
-            # Execute download
+            logger.info(f"Running command: {' '.join(cmd)}")
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
             
             if result.returncode == 0:
                 return self._process_download_result(result, url, platform=platform, 
                                                     media_type=media_type, quality=quality)
             else:
-                error_msg = result.stderr or "Unknown error"
+                error_msg = result.stderr[:500] if result.stderr else 'Unknown error'
                 logger.error(f"Download failed: {error_msg}")
+                
+                # Special handling for YouTube
+                if platform == 'youtube':
+                    if 'private' in error_msg.lower() or 'sign in' in error_msg.lower():
+                        return {
+                            'success': False,
+                            'error': 'This YouTube video requires authentication. Please make sure you are signed into YouTube in your browser.',
+                            'need_browser_login': True
+                        }
+                    elif 'age restricted' in error_msg.lower():
+                        return {
+                            'success': False,
+                            'error': 'This YouTube video is age-restricted. Please sign into YouTube in your browser to access it.',
+                            'need_browser_login': True
+                        }
+                
                 return {'success': False, 'error': f'Download failed: {error_msg}'}
                 
         except subprocess.TimeoutExpired:
@@ -963,6 +874,7 @@ class InvidiousDownloader:
                 'yt-dlp',
                 '--dump-json',
                 '--no-warnings',
+                '--cookies-from-browser', 'chrome',
                 url
             ]
             info_result = subprocess.run(info_cmd, capture_output=True, text=True, timeout=30)
@@ -980,23 +892,12 @@ class InvidiousDownloader:
                 logger.warning(f"Could not get info: {info_result.stderr}")
             
             # Determine expected file extensions
-            if media_type == 'audio':
+            if media_type == 'audio' or quality in ['bestaudio', '192', '128']:
                 expected_extensions = ('.mp3', '.m4a', '.aac', '.opus', '.vorbis')
-                audio_bitrate_map = {
-                    'bestaudio': '192',
-                    '192': '192',
-                    '128': '128'
-                }
-                audio_quality = audio_bitrate_map.get(quality, '192')
-                quality_suffix = f"__{audio_quality}kbps"
+                quality_suffix = '__audio' if quality == 'bestaudio' else f'__{quality}'
             else:
                 expected_extensions = ('.mp4', '.mkv', '.webm', '.m4a')
-                if quality == 'mp4':
-                    quality_suffix = '__mp4p'
-                elif quality == 'webm':
-                    quality_suffix = '__webm'
-                else:
-                    quality_suffix = f"__{quality}p"
+                quality_suffix = f'__{quality}'
             
             logger.info(f"Looking for file with suffix: {quality_suffix}")
             
@@ -1069,130 +970,6 @@ class InvidiousDownloader:
         except Exception as e:
             logger.error(f"Error getting file info: {e}", exc_info=True)
             return {'success': True, 'message': 'Download completed successfully', 'filename': 'video'}
-    
-    def _download_youtube_invidious(self, url, quality='720', media_type='video'):
-        """Download YouTube video using Invidious API"""
-        try:
-            import requests
-            import re
-            import subprocess
-            
-            # Extract video ID
-            video_id_match = re.search(r'(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})', url)
-            if not video_id_match:
-                return {'success': False, 'error': 'Invalid YouTube URL'}
-            
-            video_id = video_id_match.group(1)
-            
-            # Try multiple Invidious instances
-            invidious_instances = [
-                os.getenv('INVIDIOUS_INSTANCE', 'https://invidious.io'),
-                'https://invidious.io',
-                'https://inv.vern.cc',
-                'https://invidious.snopyta.org'
-            ]
-            
-            logger.info(f"Downloading YouTube video {video_id} via Invidious")
-            
-            video_info = None
-            working_instance = None
-            
-            # Try to get video info with shorter timeout
-            for instance in invidious_instances:
-                try:
-                    info_url = f"{instance}/api/v1/videos/{video_id}"
-                    logger.info(f"Trying Invidious instance: {instance}")
-                    
-                    response = requests.get(info_url, timeout=5)  # Reduced from 10 to 5 seconds
-                    response.raise_for_status()
-                    video_info = response.json()
-                    working_instance = instance
-                    
-                    logger.info(f"Successfully got video info from {instance}")
-                    break
-                except requests.exceptions.RequestException as e:
-                    logger.warning(f"Instance {instance} failed: {str(e)}")
-                    continue
-            
-            if not video_info or not working_instance:
-                logger.error("All Invidious instances failed, falling back to yt-dlp")
-                # Fallback to yt-dlp when all Invidious instances fail
-                return self._download_generic(url, quality, media_type, 'youtube')
-            
-            title = video_info.get('title', f'Video_{video_id}')
-            title = re.sub(r'[<>:"/\\|?*]', '_', title)
-            
-            logger.info(f"Video title: {title}")
-            
-            if media_type == 'audio':
-                # For audio, use standard yt-dlp
-                return self._download_generic(url, quality, media_type, 'youtube')
-            else:
-                # For video, try direct download from Invidious
-                formats = video_info.get('formatStreams', [])
-                if not formats:
-                    logger.warning("No format streams from Invidious")
-                    return self._download_generic(url, quality, media_type, 'youtube')
-                
-                # Find best format matching quality
-                target_quality = int(quality.rstrip('p')) if quality != 'best' else 720
-                best_format = None
-                
-                for fmt in formats:
-                    resolution_str = fmt.get('resolution', '')
-                    if resolution_str:
-                        try:
-                            res_height = int(resolution_str.split('p')[0])
-                            if best_format is None:
-                                best_format = fmt
-                            elif res_height <= target_quality:
-                                best_format = fmt
-                        except:
-                            continue
-                
-                if not best_format:
-                    best_format = formats[0]
-                
-                format_url = best_format.get('url')
-                if not format_url:
-                    logger.warning("No URL in format stream")
-                    return self._download_generic(url, quality, media_type, 'youtube')
-                
-                try:
-                    logger.info(f"Downloading from Invidious URL")
-                    
-                    video_response = requests.get(format_url, timeout=300, stream=True)
-                    video_response.raise_for_status()
-                    
-                    file_path = os.path.join(self.base_dir, f'{title}__{quality}p.mp4')
-                    
-                    with open(file_path, 'wb') as f:
-                        for chunk in video_response.iter_content(chunk_size=8192):
-                            if chunk:
-                                f.write(chunk)
-                    
-                    file_size = os.path.getsize(file_path)
-                    logger.info(f"Video saved to: {file_path} ({file_size} bytes)")
-                    
-                    return {
-                        'success': True,
-                        'title': title,
-                        'filename': os.path.basename(file_path),
-                        'filepath': file_path,
-                        'file_size': self.format_file_size(file_size),
-                        'download_url': f"/api/file/{os.path.basename(file_path)}",
-                        'platform': 'youtube',
-                        'media_type': 'video',
-                        'quality': quality
-                    }
-                
-                except Exception as e:
-                    logger.error(f"Invidious direct download failed: {str(e)}")
-                    return self._download_generic(url, quality, media_type, 'youtube')
-        
-        except Exception as e:
-            logger.error(f"YouTube Invidious download error: {str(e)}", exc_info=True)
-            return {'success': False, 'error': f'Download failed: {str(e)}'}
     
     def _download_spotify(self, url, quality='192', media_type='audio'):
         """Download Spotify track using RapidAPI"""
@@ -1560,6 +1337,9 @@ def analyze_media():
         
         if result['success']:
             logger.info(f"Successfully analyzed: {result['title']}")
+            # Add browser login hint for YouTube
+            if result['platform'] == 'youtube':
+                result['browser_login_hint'] = 'For best results, make sure you are signed into YouTube in your browser.'
         else:
             logger.error(f"Analysis failed: {result['error']}")
         
@@ -1607,19 +1387,17 @@ def download_media():
             if 'filename' in result and 'download_url' not in result:
                 result['download_url'] = f"/api/file/{result['filename']}"
             
-            # Check if authentication is needed (for YouTube)
-            if url.lower().count('youtube') > 0 and not is_authenticated():
-                result['auth_suggestion'] = {
-                    'message': 'For better YouTube download success, consider authenticating with Google',
-                    'auth_url': '/api/oauth2authorize'
-                }
+            # Add browser login hint for YouTube
+            if 'youtube' in url.lower():
+                result['browser_login_hint'] = 'Tip: For YouTube downloads, make sure you are signed into YouTube in your browser.'
         else:
             logger.error(f"Download failed: {result.get('error', 'Unknown error')}")
             
-            # Check if it's an authentication error for YouTube
-            if url.lower().count('youtube') > 0 and 'private' in result.get('error', '').lower():
-                result['need_auth'] = True
-                result['auth_url'] = '/api/oauth2authorize'
+            # Add browser login suggestion for YouTube errors
+            if 'youtube' in url.lower() and ('private' in result.get('error', '').lower() or 
+                                           'sign in' in result.get('error', '').lower() or
+                                           'age restricted' in result.get('error', '').lower()):
+                result['browser_login_hint'] = 'This YouTube video requires you to be signed into YouTube in your browser. Please open YouTube.com, sign in, then try again.'
         
         return jsonify(result)
     
@@ -1666,8 +1444,9 @@ def get_platforms():
             'icon': 'fab fa-youtube',
             'color': '#FF0000',
             'supported': True,
-            'requires_auth': True,
-            'auth_type': 'oauth'
+            'requires_auth': False,  # Changed from True to False - uses browser cookies
+            'auth_type': 'browser_cookies',
+            'hint': 'Sign into YouTube in your browser for best results'
         },
         {
             'name': 'TikTok',
@@ -1696,7 +1475,8 @@ def get_platforms():
             'color': '#1DB954',
             'supported': True,
             'requires_auth': False,
-            'rate_limited': True
+            'rate_limited': True,
+            'hint': 'Limited to 20 downloads per day'
         }
     ]
     
@@ -1854,6 +1634,7 @@ def terms_of_service():
                 <li><strong>Lawful Use Only:</strong> Use the Service only for lawful purposes and in a way that does not infringe upon the rights of others.</li>
                 <li><strong>No Illegal Content:</strong> Do not download, upload, or share content that is illegal, infringing, pornographic, hateful, threatening, or abusive.</li>
                 <li><strong>Account Security:</strong> You are responsible for maintaining the confidentiality of your account information and password.</li>
+                <li><strong>Browser Authentication:</strong> For YouTube downloads, you must be signed into YouTube in your browser. JayDL uses browser cookies to access YouTube content.</li>
             </ol>
             
             <h2>Third-Party Platform Terms</h2>
@@ -1865,6 +1646,14 @@ def terms_of_service():
             
             <h2>Content Downloads</h2>
             <p>We do not store, host, or distribute the content you download. The Service only facilitates the download process. Users are solely responsible for ensuring they have the right to download and use any content.</p>
+            
+            <h2>Browser Cookies</h2>
+            <p>JayDL uses browser cookies to access YouTube content. For YouTube downloads to work properly, you must:</p>
+            <ul>
+                <li>Be signed into YouTube in your browser</li>
+                <li>Allow cookies from YouTube</li>
+                <li>Not clear your browser cookies before downloading</li>
+            </ul>
             
             <h2>Limitation of Liability</h2>
             <p>JayDL shall not be liable for any indirect, incidental, special, consequential, or punitive damages resulting from your use of or inability to use the Service.</p>

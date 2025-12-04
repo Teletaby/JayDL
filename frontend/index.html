@@ -3,144 +3,129 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>JayDL</title>
+    <title>JayDL - Download Videos & Music</title>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
     <style>
-        /* Additional styles for OAuth */
-        .auth-status {
-            padding: 8px 16px;
-            border-radius: 20px;
-            font-size: 14px;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            margin-left: 10px;
-        }
-        
-        .auth-status.authenticated {
-            background: #10b981;
+        /* Browser login hint styling */
+        .browser-login-hint {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+            display: none;
+            animation: fadeIn 0.5s ease-in;
         }
         
-        .auth-status.not-authenticated {
-            background: #6b7280;
-            color: white;
+        .browser-login-hint.show {
+            display: block;
         }
         
-        .auth-modal {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0, 0, 0, 0.8);
+        .browser-login-hint-content {
             display: flex;
-            justify-content: center;
             align-items: center;
-            z-index: 1000;
+            gap: 15px;
         }
         
-        .auth-modal-content {
-            background: white;
-            padding: 30px;
-            border-radius: 10px;
-            max-width: 500px;
-            width: 90%;
-            text-align: center;
+        .browser-login-icon {
+            font-size: 24px;
+            background: rgba(255, 255, 255, 0.2);
+            padding: 10px;
+            border-radius: 50%;
         }
         
-        .auth-modal h2 {
-            margin-bottom: 20px;
-            color: #333;
+        .browser-login-text {
+            flex: 1;
         }
         
-        .auth-modal p {
-            margin-bottom: 20px;
-            color: #666;
-            line-height: 1.6;
+        .browser-login-text h4 {
+            margin: 0 0 5px 0;
+            font-size: 16px;
         }
         
-        .auth-buttons {
+        .browser-login-text p {
+            margin: 0;
+            font-size: 14px;
+            opacity: 0.9;
+        }
+        
+        .browser-login-actions {
             display: flex;
             gap: 10px;
-            justify-content: center;
-            margin-top: 20px;
         }
         
-        .btn-auth {
-            padding: 10px 20px;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            font-weight: 600;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            transition: all 0.3s ease;
-        }
-        
-        .btn-auth-google {
-            background: #4285f4;
+        .btn-browser-help {
+            background: rgba(255, 255, 255, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.3);
             color: white;
-        }
-        
-        .btn-auth-google:hover {
-            background: #357ae8;
-        }
-        
-        .btn-auth-cancel {
-            background: #ef4444;
-            color: white;
-        }
-        
-        .btn-auth-cancel:hover {
-            background: #dc2626;
-        }
-        
-        .auth-success {
-            color: #10b981;
-            background: #d1fae5;
-            padding: 10px;
-            border-radius: 5px;
-            margin: 10px 0;
-            display: none;
-        }
-        
-        .auth-error {
-            color: #ef4444;
-            background: #fee2e2;
-            padding: 10px;
-            border-radius: 5px;
-            margin: 10px 0;
-            display: none;
-        }
-        
-        .navbar-auth-btn {
-            background: #4285f4;
-            color: white;
-            border: none;
             padding: 8px 16px;
-            border-radius: 20px;
+            border-radius: 5px;
             cursor: pointer;
+            font-size: 14px;
             display: flex;
             align-items: center;
-            gap: 8px;
-            font-size: 14px;
+            gap: 5px;
             transition: all 0.3s ease;
         }
         
-        .navbar-auth-btn:hover {
-            background: #357ae8;
-            transform: translateY(-2px);
+        .btn-browser-help:hover {
+            background: rgba(255, 255, 255, 0.3);
         }
         
-        .navbar-auth-btn.authenticated {
-            background: #10b981;
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
         }
         
-        .navbar-auth-btn.authenticated:hover {
-            background: #0da271;
+        /* YouTube specific styling */
+        .youtube-notice {
+            background: #ff000010;
+            border-left: 4px solid #FF0000;
+            padding: 10px 15px;
+            margin: 10px 0;
+            border-radius: 0 5px 5px 0;
+        }
+        
+        .youtube-notice i {
+            color: #FF0000;
+            margin-right: 8px;
+        }
+        
+        /* Platform badges */
+        .platform-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            margin-left: 8px;
+            text-transform: uppercase;
+        }
+        
+        .platform-badge.youtube {
+            background: #FF0000;
+            color: white;
+        }
+        
+        .platform-badge.tiktok {
+            background: #000000;
+            color: white;
+        }
+        
+        .platform-badge.instagram {
+            background: linear-gradient(45deg, #405de6, #5851db, #833ab4, #c13584, #e1306c, #fd1d1d);
+            color: white;
+        }
+        
+        .platform-badge.twitter {
+            background: #1DA1F2;
+            color: white;
+        }
+        
+        .platform-badge.spotify {
+            background: #1DB954;
+            color: white;
         }
     </style>
 </head>
@@ -154,17 +139,9 @@
                 <div class="navbar-brand">
                     <h1><i class="fas fa-download"></i> JayDL</h1>
                 </div>
-                <div id="authStatus" class="auth-status not-authenticated" style="display: none;">
-                    <i class="fas fa-user"></i>
-                    <span>Not Signed In</span>
-                </div>
             </div>
             <p class="navbar-subtitle">Download videos and music from various platforms</p>
             <div class="navbar-right">
-                <button class="navbar-auth-btn" id="authBtn" title="Sign in with Google">
-                    <i class="fab fa-google"></i>
-                    <span id="authBtnText">Sign In</span>
-                </button>
                 <button class="navbar-chat-btn" id="chatBtn" title="Open Chatbot">
                     <i class="fas fa-comments"></i>
                 </button>
@@ -179,37 +156,35 @@
             <a href="#" class="dropdown-item" onclick="openChatbot(); return false;">
                 <i class="fas fa-comments"></i> Chatbot Assistant
             </a>
-            <a href="#" class="dropdown-item" onclick="checkAuthStatus(); return false;">
-                <i class="fas fa-user"></i> Account Status
+            <a href="#" class="dropdown-item" onclick="showBrowserHelp(); return false;">
+                <i class="fas fa-question-circle"></i> YouTube Help
             </a>
         </div>
     </nav>
 
-    <!-- Auth Modal -->
-    <div id="authModal" class="auth-modal hidden">
-        <div class="auth-modal-content">
-            <h2><i class="fab fa-google"></i> Google Authentication</h2>
-            <p>Sign in with Google to enable YouTube downloads and access private content.</p>
-            <p>This will allow JayDL to access your YouTube account for downloading videos (read-only access).</p>
-            <div id="authSuccess" class="auth-success" style="display: none;">
-                <i class="fas fa-check-circle"></i> Successfully authenticated!
-            </div>
-            <div id="authError" class="auth-error" style="display: none;">
-                <i class="fas fa-exclamation-circle"></i> <span id="authErrorMessage">Authentication failed</span>
-            </div>
-            <div class="auth-buttons">
-                <button class="btn-auth btn-auth-google" onclick="startGoogleAuth()">
-                    <i class="fab fa-google"></i> Sign in with Google
-                </button>
-                <button class="btn-auth btn-auth-cancel" onclick="closeAuthModal()">
-                    <i class="fas fa-times"></i> Cancel
-                </button>
-            </div>
-        </div>
-    </div>
-
     <div class="container">
         <main>
+            <!-- Browser Login Hint (shown for YouTube) -->
+            <div id="browserLoginHint" class="browser-login-hint">
+                <div class="browser-login-hint-content">
+                    <div class="browser-login-icon">
+                        <i class="fab fa-youtube"></i>
+                    </div>
+                    <div class="browser-login-text">
+                        <h4>YouTube Download Tip</h4>
+                        <p>For YouTube downloads to work, make sure you are signed into YouTube in your browser. The app uses your browser cookies to access YouTube content.</p>
+                    </div>
+                    <div class="browser-login-actions">
+                        <button class="btn-browser-help" onclick="showBrowserHelp()">
+                            <i class="fas fa-question-circle"></i> Help
+                        </button>
+                        <button class="btn-browser-help" onclick="hideBrowserHint()">
+                            <i class="fas fa-times"></i> Dismiss
+                        </button>
+                    </div>
+                </div>
+            </div>
+
             <div class="card input-section">
                 <div class="url-input-container">
                     <input type="text" id="urlInput" placeholder="Paste YouTube, TikTok, Instagram, Twitter, or Spotify URL here...">
@@ -262,15 +237,6 @@
                     <button id="downloadBtn" class="btn btn-download">
                         <i class="fas fa-download"></i> Download Now
                     </button>
-                    
-                    <!-- YouTube Auth Warning -->
-                    <div id="youtubeAuthWarning" class="alert alert-warning hidden" style="margin-top: 20px;">
-                        <i class="fab fa-youtube"></i>
-                        <span>For better YouTube download success, consider signing in with Google.</span>
-                        <button class="btn btn-sm" onclick="openAuthModal()" style="margin-left: 10px;">
-                            <i class="fab fa-google"></i> Sign In
-                        </button>
-                    </div>
                 </div>
             </div>
 
@@ -308,33 +274,75 @@
         </div>
     </div>
 
-    <script>
-        // Detect backend URL - support both local and deployed environments
-        const getBackendUrl = () => {
-            const protocol = window.location.protocol;
-            const hostname = window.location.hostname;
-            const port = window.location.port;
-            
-            // If running on localhost frontend on port 8000, backend is on 5000
-            if (hostname === 'localhost' || hostname === '127.0.0.1') {
-                return `${protocol}//${hostname}:5000`;
-            }
-            
-            // For Render deployment: frontend is jaydl-frontend.onrender.com, backend is jaydl-backend.onrender.com
-            if (hostname.includes('onrender.com')) {
-                return 'https://jaydl-backend.onrender.com';
-            }
-            
-            // Otherwise, backend is on same host
-            return `${protocol}//${hostname}${port ? ':' + port : ''}`;
-        };
+    <!-- Browser Help Modal -->
+    <div id="browserHelpModal" class="modal hidden">
+        <div class="modal-content" style="max-width: 600px;">
+            <h2><i class="fab fa-youtube"></i> YouTube Download Help</h2>
+            <div class="help-section">
+                <h3><i class="fas fa-check-circle"></i> How it works:</h3>
+                <p>JayDL uses your browser cookies to access YouTube. This means you need to be signed into YouTube in your browser.</p>
+                
+                <div class="help-steps">
+                    <div class="help-step">
+                        <div class="step-number">1</div>
+                        <div class="step-content">
+                            <h4>Sign into YouTube</h4>
+                            <p>Open <a href="https://youtube.com" target="_blank">YouTube.com</a> and make sure you're signed in with your Google account.</p>
+                        </div>
+                    </div>
+                    
+                    <div class="help-step">
+                        <div class="step-number">2</div>
+                        <div class="step-content">
+                            <h4>Don't clear cookies</h4>
+                            <p>Don't clear your browser cookies before using JayDL. The app needs your YouTube session cookies.</p>
+                        </div>
+                    </div>
+                    
+                    <div class="help-step">
+                        <div class="step-number">3</div>
+                        <div class="step-content">
+                            <h4>Use the same browser</h4>
+                            <p>Make sure you're using the same browser where you're signed into YouTube (Chrome, Firefox, Edge, etc.).</p>
+                        </div>
+                    </div>
+                    
+                    <div class="help-step">
+                        <div class="step-number">4</div>
+                        <div class="step-content">
+                            <h4>Try private/age-restricted videos</h4>
+                            <p>Being signed in also allows you to download private and age-restricted YouTube videos.</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="help-tips">
+                    <h3><i class="fas fa-lightbulb"></i> Tips for best results:</h3>
+                    <ul>
+                        <li>Use Chrome or Firefox for best compatibility</li>
+                        <li>Keep your browser updated</li>
+                        <li>Don't use incognito/private mode</li>
+                        <li>If downloads fail, try signing out and back into YouTube</li>
+                    </ul>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-primary" onclick="closeBrowserHelp()">
+                    <i class="fas fa-check"></i> Got it!
+                </button>
+                <button class="btn" onclick="window.open('https://youtube.com', '_blank')">
+                    <i class="fab fa-youtube"></i> Open YouTube
+                </button>
+            </div>
+        </div>
+    </div>
 
+    <script>
         const API_BASE = 'https://jaydl-backend.onrender.com';
         let currentMediaInfo = null;
         let selectedQuality = 'best';
         let selectedMediaType = 'video';
-        let isAuthenticated = false;
-        let currentUser = null;
+        let isYouTubeUrl = false;
 
         function formatFileSize(bytes) {
             if (!bytes || bytes === 'Unknown' || bytes === 0) return 'Unknown';
@@ -352,15 +360,15 @@
         document.addEventListener('DOMContentLoaded', () => {
             loadPlatforms();
             setupEventListeners();
-            checkAuthStatus(); // Check authentication status on load
+            checkForYouTubeHint();
         });
 
         function setupEventListeners() {
             document.getElementById('pasteBtn').addEventListener('click', pasteFromClipboard);
             document.getElementById('analyzeBtn').addEventListener('click', analyzeMedia);
             document.getElementById('downloadBtn').addEventListener('click', downloadMedia);
-            document.getElementById('authBtn').addEventListener('click', openAuthModal);
             
+            document.getElementById('urlInput').addEventListener('input', checkForYouTubeHint);
             document.getElementById('urlInput').addEventListener('keypress', (e) => {
                 if (e.key === 'Enter') analyzeMedia();
             });
@@ -380,10 +388,38 @@
             });
         }
 
+        function checkForYouTubeHint() {
+            const url = document.getElementById('urlInput').value.trim();
+            isYouTubeUrl = url.includes('youtube.com') || url.includes('youtu.be');
+            
+            if (isYouTubeUrl) {
+                showBrowserHint();
+            } else {
+                hideBrowserHint();
+            }
+        }
+
+        function showBrowserHint() {
+            document.getElementById('browserLoginHint').classList.add('show');
+        }
+
+        function hideBrowserHint() {
+            document.getElementById('browserLoginHint').classList.remove('show');
+        }
+
+        function showBrowserHelp() {
+            document.getElementById('browserHelpModal').classList.remove('hidden');
+        }
+
+        function closeBrowserHelp() {
+            document.getElementById('browserHelpModal').classList.add('hidden');
+        }
+
         async function pasteFromClipboard() {
             try {
                 const text = await navigator.clipboard.readText();
                 document.getElementById('urlInput').value = text;
+                checkForYouTubeHint();
                 showSuccess('URL pasted from clipboard!');
             } catch (err) {
                 showError('Failed to paste from clipboard');
@@ -539,11 +575,9 @@
                     displayMediaInfo(data);
                     showSuccess('Media analyzed successfully!');
                     
-                    // Show YouTube auth warning if it's a YouTube URL and user is not authenticated
-                    if (url.toLowerCase().includes('youtube') && !isAuthenticated) {
-                        document.getElementById('youtubeAuthWarning').classList.remove('hidden');
-                    } else {
-                        document.getElementById('youtubeAuthWarning').classList.add('hidden');
+                    // Show browser hint for YouTube
+                    if (data.platform === 'youtube') {
+                        showBrowserHint();
                     }
                 } else {
                     showError(data.error || 'Failed to analyze media');
@@ -718,17 +752,15 @@
                 hideLoading();
 
                 if (data.success) {
-                    // Check if we need to refresh auth
-                    if (data.need_auth) {
-                        showError('YouTube authentication required! Please sign in with Google.');
-                        openAuthModal();
-                        return;
-                    }
-                    
                     // Trigger download
                     if (data.download_url) {
                         window.location.href = `${API_BASE}${data.download_url}`;
                         showSuccess('Download started! Check your downloads folder.');
+                        
+                        // Show browser hint if present
+                        if (data.browser_login_hint && isYouTubeUrl) {
+                            showBrowserHint();
+                        }
                     } else if (data.filename) {
                         // Construct download URL if not provided
                         const downloadUrl = `${API_BASE}/api/file/${data.filename}`;
@@ -745,20 +777,20 @@
                             showError(`⚠️ Spotify Rate Limit: Only ${remaining} downloads remaining today. Resets at midnight.`);
                         }
                     }
-                    
-                    // Show auth suggestion if present
-                    if (data.auth_suggestion) {
-                        console.log('Auth suggestion:', data.auth_suggestion);
-                    }
                 } else {
                     // Check for rate limit error
                     if (data.rate_limit_hit) {
                         showError(`⛔ Spotify Rate Limit Reached! You've reached 20 downloads today. This limit resets at midnight (${data.resets_at}). Please try again tomorrow.`);
-                    } else if (data.need_auth) {
-                        showError('YouTube authentication required! Please sign in with Google.');
-                        openAuthModal();
+                    } else if (data.need_browser_login) {
+                        showError('❌ ' + data.error);
+                        showBrowserHelp();
                     } else {
                         showError(data.error || 'Download failed. Please try again.');
+                        
+                        // Show browser help for YouTube errors
+                        if (isYouTubeUrl && (data.error.includes('sign in') || data.error.includes('private') || data.error.includes('age restricted'))) {
+                            showBrowserHelp();
+                        }
                     }
                 }
             } catch (err) {
@@ -769,30 +801,29 @@
         }
 
         async function loadPlatforms() {
-    try {
-        const response = await fetch(`${API_BASE}/api/platforms`, {
-            credentials: 'include'  // ADD THIS LINE - it must be inside the options object
-        });
-        const data = await response.json();
-        
-        if (data.success && data.platforms) {
-            const grid = document.getElementById('platformsGrid');
-            grid.innerHTML = data.platforms.map(p => `
-                <div class="platform-card">
-                    <i class="${p.icon}" style="color: ${p.color}"></i>
-                    <div style="font-weight: 500; margin-top: 10px;">${p.name}</div>
-                    ${p.supported ? '<small style="color: #10b981;">✓ Supported</small>' : '<small style="color: #ef4444;">✗ Coming Soon</small>'}
-                    ${p.requires_auth ? '<br><small style="color: #f59e0b;">🔐 Requires Sign In</small>' : ''}
-                    ${p.rate_limited ? '<br><small style="color: #8b5cf6;">⏱️ Rate Limited</small>' : ''}
-                </div>
-            `).join('');
+            try {
+                const response = await fetch(`${API_BASE}/api/platforms`, {
+                    credentials: 'include'
+                });
+                const data = await response.json();
+                
+                if (data.success && data.platforms) {
+                    const grid = document.getElementById('platformsGrid');
+                    grid.innerHTML = data.platforms.map(p => `
+                        <div class="platform-card">
+                            <i class="${p.icon}" style="color: ${p.color}"></i>
+                            <div style="font-weight: 500; margin-top: 10px;">${p.name}</div>
+                            ${p.supported ? '<small style="color: #10b981;">✓ Supported</small>' : '<small style="color: #ef4444;">✗ Coming Soon</small>'}
+                            ${p.hint ? `<br><small style="color: #8b5cf6; font-size: 11px;">${p.hint}</small>` : ''}
+                        </div>
+                    `).join('');
+                }
+            } catch (err) {
+                console.error('Failed to load platforms:', err);
+                // Show error message in platforms grid
+                document.getElementById('platformsGrid').innerHTML = '<p style="color: #666;">Unable to load platforms. Make sure the backend is running.</p>';
+            }
         }
-    } catch (err) {
-        console.error('Failed to load platforms:', err);
-        // Show error message in platforms grid
-        document.getElementById('platformsGrid').innerHTML = '<p style="color: #666;">Unable to load platforms. Make sure the backend is running.</p>';
-    }
-}
 
         function isValidUrl(string) {
             try {
@@ -814,7 +845,7 @@
 
         function showError(message) {
             const alert = document.getElementById('errorAlert');
-            alert.textContent = message;
+            alert.innerHTML = message;
             alert.classList.remove('hidden');
             setTimeout(() => hideError(), 8000);
         }
@@ -833,135 +864,6 @@
         function hideSuccess() {
             document.getElementById('successAlert').classList.add('hidden');
         }
-
-        // =============== OAUTH AUTHENTICATION FUNCTIONS ===============
-
-        async function checkAuthStatus() {
-    try {
-        const response = await fetch(`${API_BASE}/api/oauth2status`, {
-            method: 'GET',
-            credentials: 'include',  // CRITICAL: Include cookies/session
-            headers: {
-                'Accept': 'application/json',
-                'Content-Type': 'application/json'
-            }
-        });
-        
-        if (!response.ok) {
-            throw new Error('Failed to check auth status');
-        }
-        
-        const data = await response.json();
-        // ... rest of your existing code ...
-    } catch (err) {
-        console.error('Error checking auth status:', err);
-        return false;
-    }
-}
-
-        function openAuthModal() {
-            document.getElementById('authModal').classList.remove('hidden');
-            document.getElementById('authSuccess').style.display = 'none';
-            document.getElementById('authError').style.display = 'none';
-        }
-
-        function closeAuthModal() {
-            document.getElementById('authModal').classList.add('hidden');
-        }
-
-        async function startGoogleAuth() {
-    try {
-        // Get authorization URL from backend with frontend URL as parameter
-        const frontendUrl = window.location.origin;
-        const response = await fetch(`${API_BASE}/api/oauth2authorize?redirect_uri=${encodeURIComponent(frontendUrl)}`, {
-            credentials: 'include'  // IMPORTANT: Include cookies
-        });
-        
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-        
-        const data = await response.json();
-        
-        if (data.success && data.auth_url) {
-            // Close the modal before redirecting
-            closeAuthModal();
-            
-            // Redirect to Google OAuth (same tab/window - no popup)
-            // Use setTimeout to ensure modal closes before redirect
-            setTimeout(() => {
-                window.location.href = data.auth_url;
-            }, 100);
-        } else {
-            showAuthError(data.error || 'Failed to start authentication');
-        }
-    } catch (err) {
-        console.error('Auth error:', err);
-        showAuthError('Authentication failed. Please try again.');
-    }
-}
-
-        function showAuthSuccess() {
-            document.getElementById('authSuccess').style.display = 'block';
-            document.getElementById('authError').style.display = 'none';
-        }
-
-        function showAuthError(message) {
-            document.getElementById('authErrorMessage').textContent = message;
-            document.getElementById('authError').style.display = 'block';
-            document.getElementById('authSuccess').style.display = 'none';
-        }
-
-        async function logoutUser() {
-            try {
-                const response = await fetch(`${API_BASE}/api/oauth2logout`, {
-                    credentials: 'include'
-                });
-                
-                if (response.ok) {
-                    isAuthenticated = false;
-                    currentUser = null;
-                    
-                    // Update UI
-                    document.getElementById('authStatus').innerHTML = `
-                        <i class="fas fa-user"></i>
-                        <span>Not Signed In</span>
-                    `;
-                    document.getElementById('authStatus').className = 'auth-status not-authenticated';
-                    
-                    document.getElementById('authBtn').innerHTML = `
-                        <i class="fab fa-google"></i>
-                        <span>Sign In</span>
-                    `;
-                    document.getElementById('authBtn').className = 'navbar-auth-btn';
-                    document.getElementById('authBtn').onclick = openAuthModal;
-                    
-                    showSuccess('Successfully signed out!');
-                    console.log('User logged out');
-                }
-            } catch (err) {
-                console.error('Logout error:', err);
-                showError('Failed to sign out');
-            }
-        }
-
-        // Check URL hash for auth success callback
-        function checkUrlHash() {
-            if (window.location.hash === '#auth_success') {
-                // Remove hash from URL
-                history.replaceState(null, null, ' ');
-                
-                // Check auth status
-                checkAuthStatus().then(authenticated => {
-                    if (authenticated) {
-                        showSuccess('Successfully signed in with Google!');
-                    }
-                });
-            }
-        }
-
-        // Check hash on page load
-        checkUrlHash();
 
         // =============== NAVBAR & CHATBOT FUNCTIONS ===============
 
@@ -1030,7 +932,7 @@
                 <h3><i class="fas fa-cookie"></i> Cookie & Analytics Notice</h3>
                 <p>We use cookies to remember your preferences and improve your experience. By clicking "Agree", you consent to our use of cookies for analytics and site functionality.</p>
                 <p class="cookie-details">
-                    <strong>What we track:</strong> Download preferences, video quality selections, language settings, and site usage analytics.
+                    <strong>Important:</strong> For YouTube downloads, JayDL uses your browser cookies to access YouTube. This requires you to be signed into YouTube in your browser.
                 </p>
                 <div class="cookie-links">
                     <a href="/privacy" target="_blank">Privacy Policy</a> • 

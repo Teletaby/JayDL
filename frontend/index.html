@@ -6,6 +6,143 @@
     <title>JayDL</title>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
+    <style>
+        /* Additional styles for OAuth */
+        .auth-status {
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 14px;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            margin-left: 10px;
+        }
+        
+        .auth-status.authenticated {
+            background: #10b981;
+            color: white;
+        }
+        
+        .auth-status.not-authenticated {
+            background: #6b7280;
+            color: white;
+        }
+        
+        .auth-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+        
+        .auth-modal-content {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            max-width: 500px;
+            width: 90%;
+            text-align: center;
+        }
+        
+        .auth-modal h2 {
+            margin-bottom: 20px;
+            color: #333;
+        }
+        
+        .auth-modal p {
+            margin-bottom: 20px;
+            color: #666;
+            line-height: 1.6;
+        }
+        
+        .auth-buttons {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin-top: 20px;
+        }
+        
+        .btn-auth {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.3s ease;
+        }
+        
+        .btn-auth-google {
+            background: #4285f4;
+            color: white;
+        }
+        
+        .btn-auth-google:hover {
+            background: #357ae8;
+        }
+        
+        .btn-auth-cancel {
+            background: #ef4444;
+            color: white;
+        }
+        
+        .btn-auth-cancel:hover {
+            background: #dc2626;
+        }
+        
+        .auth-success {
+            color: #10b981;
+            background: #d1fae5;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            display: none;
+        }
+        
+        .auth-error {
+            color: #ef4444;
+            background: #fee2e2;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            display: none;
+        }
+        
+        .navbar-auth-btn {
+            background: #4285f4;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 20px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+            transition: all 0.3s ease;
+        }
+        
+        .navbar-auth-btn:hover {
+            background: #357ae8;
+            transform: translateY(-2px);
+        }
+        
+        .navbar-auth-btn.authenticated {
+            background: #10b981;
+        }
+        
+        .navbar-auth-btn.authenticated:hover {
+            background: #0da271;
+        }
+    </style>
 </head>
 <body>
     <nav class="navbar">
@@ -17,14 +154,24 @@
                 <div class="navbar-brand">
                     <h1><i class="fas fa-download"></i> JayDL</h1>
                 </div>
+                <div id="authStatus" class="auth-status not-authenticated" style="display: none;">
+                    <i class="fas fa-user"></i>
+                    <span>Not Signed In</span>
+                </div>
             </div>
             <p class="navbar-subtitle">Download videos and music from various platforms</p>
-            <button class="navbar-yt-btn" id="ytAuthBtn" title="Enable YouTube Downloads">
-                <i class="fab fa-youtube"></i>
-            </button>
-            <button class="navbar-chat-btn" id="chatBtn" title="Open Chatbot">
-                <i class="fas fa-comments"></i>
-            </button>
+            <div class="navbar-right">
+                <button class="navbar-auth-btn" id="authBtn" title="Sign in with Google">
+                    <i class="fab fa-google"></i>
+                    <span id="authBtnText">Sign In</span>
+                </button>
+                <button class="navbar-yt-btn" id="ytAuthBtn" title="YouTube Authentication">
+                    <i class="fab fa-youtube"></i>
+                </button>
+                <button class="navbar-chat-btn" id="chatBtn" title="Open Chatbot">
+                    <i class="fas fa-comments"></i>
+                </button>
+            </div>
         </div>
         
         <!-- Dropdown Menu -->
@@ -35,8 +182,34 @@
             <a href="#" class="dropdown-item" onclick="openChatbot(); return false;">
                 <i class="fas fa-comments"></i> Chatbot Assistant
             </a>
+            <a href="#" class="dropdown-item" onclick="checkAuthStatus(); return false;">
+                <i class="fas fa-user"></i> Account Status
+            </a>
         </div>
     </nav>
+
+    <!-- Auth Modal -->
+    <div id="authModal" class="auth-modal hidden">
+        <div class="auth-modal-content">
+            <h2><i class="fab fa-google"></i> Google Authentication</h2>
+            <p>Sign in with Google to enable YouTube downloads and access private content.</p>
+            <p>This will allow JayDL to access your YouTube account for downloading videos (read-only access).</p>
+            <div id="authSuccess" class="auth-success" style="display: none;">
+                <i class="fas fa-check-circle"></i> Successfully authenticated!
+            </div>
+            <div id="authError" class="auth-error" style="display: none;">
+                <i class="fas fa-exclamation-circle"></i> <span id="authErrorMessage">Authentication failed</span>
+            </div>
+            <div class="auth-buttons">
+                <button class="btn-auth btn-auth-google" onclick="startGoogleAuth()">
+                    <i class="fab fa-google"></i> Sign in with Google
+                </button>
+                <button class="btn-auth btn-auth-cancel" onclick="closeAuthModal()">
+                    <i class="fas fa-times"></i> Cancel
+                </button>
+            </div>
+        </div>
+    </div>
 
     <div class="container">
         <main>
@@ -92,6 +265,15 @@
                     <button id="downloadBtn" class="btn btn-download">
                         <i class="fas fa-download"></i> Download Now
                     </button>
+                    
+                    <!-- YouTube Auth Warning -->
+                    <div id="youtubeAuthWarning" class="alert alert-warning hidden" style="margin-top: 20px;">
+                        <i class="fab fa-youtube"></i>
+                        <span>For better YouTube download success, consider signing in with Google.</span>
+                        <button class="btn btn-sm" onclick="openAuthModal()" style="margin-left: 10px;">
+                            <i class="fab fa-google"></i> Sign In
+                        </button>
+                    </div>
                 </div>
             </div>
 
@@ -154,6 +336,8 @@
         let currentMediaInfo = null;
         let selectedQuality = 'best';
         let selectedMediaType = 'video';
+        let isAuthenticated = false;
+        let currentUser = null;
 
         function formatFileSize(bytes) {
             if (!bytes || bytes === 'Unknown' || bytes === 0) return 'Unknown';
@@ -171,13 +355,14 @@
         document.addEventListener('DOMContentLoaded', () => {
             loadPlatforms();
             setupEventListeners();
-            checkYouTubeAuth();
+            checkAuthStatus(); // Check authentication status on load
         });
 
         function setupEventListeners() {
             document.getElementById('pasteBtn').addEventListener('click', pasteFromClipboard);
             document.getElementById('analyzeBtn').addEventListener('click', analyzeMedia);
             document.getElementById('downloadBtn').addEventListener('click', downloadMedia);
+            document.getElementById('authBtn').addEventListener('click', openAuthModal);
             
             document.getElementById('urlInput').addEventListener('keypress', (e) => {
                 if (e.key === 'Enter') analyzeMedia();
@@ -196,9 +381,6 @@
                     filterFormatOptions(format);
                 });
             });
-
-            // YouTube auth button
-            document.getElementById('ytAuthBtn').addEventListener('click', enableYouTubeAuth);
         }
 
         async function pasteFromClipboard() {
@@ -358,6 +540,13 @@
                 if (data.success) {
                     displayMediaInfo(data);
                     showSuccess('Media analyzed successfully!');
+                    
+                    // Show YouTube auth warning if it's a YouTube URL and user is not authenticated
+                    if (url.toLowerCase().includes('youtube') && !isAuthenticated) {
+                        document.getElementById('youtubeAuthWarning').classList.remove('hidden');
+                    } else {
+                        document.getElementById('youtubeAuthWarning').classList.add('hidden');
+                    }
                 } else {
                     showError(data.error || 'Failed to analyze media');
                 }
@@ -532,7 +721,8 @@
                 if (data.success) {
                     // Check if we need to refresh auth
                     if (data.need_auth) {
-                        showError('YouTube authentication required! Click the YouTube button to enable downloads.');
+                        showError('YouTube authentication required! Please sign in with Google.');
+                        openAuthModal();
                         return;
                     }
                     
@@ -556,12 +746,18 @@
                             showError(`⚠️ Spotify Rate Limit: Only ${remaining} downloads remaining today. Resets at midnight.`);
                         }
                     }
+                    
+                    // Show auth suggestion if present
+                    if (data.auth_suggestion) {
+                        console.log('Auth suggestion:', data.auth_suggestion);
+                    }
                 } else {
                     // Check for rate limit error
                     if (data.rate_limit_hit) {
                         showError(`⛔ Spotify Rate Limit Reached! You've reached 20 downloads today. This limit resets at midnight (${data.resets_at}). Please try again tomorrow.`);
                     } else if (data.need_auth) {
-                        showError('YouTube authentication required! Click the YouTube button to enable downloads.');
+                        showError('YouTube authentication required! Please sign in with Google.');
+                        openAuthModal();
                     } else {
                         showError(data.error || 'Download failed. Please try again.');
                     }
@@ -585,6 +781,8 @@
                             <i class="${p.icon}" style="color: ${p.color}"></i>
                             <div style="font-weight: 500; margin-top: 10px;">${p.name}</div>
                             ${p.supported ? '<small style="color: #10b981;">✓ Supported</small>' : '<small style="color: #ef4444;">✗ Coming Soon</small>'}
+                            ${p.requires_auth ? '<br><small style="color: #f59e0b;">🔐 Requires Sign In</small>' : ''}
+                            ${p.rate_limited ? '<br><small style="color: #8b5cf6;">⏱️ Rate Limited</small>' : ''}
                         </div>
                     `).join('');
                 }
@@ -635,262 +833,193 @@
             document.getElementById('successAlert').classList.add('hidden');
         }
 
-        // =============== YOUTUBE AUTHENTICATION FUNCTIONS ===============
+        // =============== OAUTH AUTHENTICATION FUNCTIONS ===============
 
-        // Check if YouTube is already authenticated
-        function checkYouTubeAuth() {
-            const stored = localStorage.getItem('yt_authenticated');
-            if (stored === 'true') {
-                document.getElementById('ytAuthBtn').classList.add('authenticated');
-                console.log('YouTube is already authenticated');
-            }
-        }
-
-        // Enable YouTube authentication
-        function enableYouTubeAuth() {
-            // Show permission dialog
-            const permission = confirm(`🔐 YouTube Authentication
-
-To enable YouTube downloads, JayDL needs to access YouTube in your browser.
-
-This will:
-1. Open YouTube in a new window
-2. Use your logged-in YouTube session
-3. Enable downloads without restrictions
-
-Your password is NEVER stored - only temporary session cookies.
-
-Allow YouTube authentication?`);
-            
-            if (!permission) {
-                return;
-            }
-            
-            // Start authentication
-            authenticateYouTube();
-        }
-
-        // Main authentication function
-        async function authenticateYouTube() {
-            showLoading('Setting up YouTube authentication...');
-            
+        async function checkAuthStatus() {
             try {
-                // Method 1: Try to create a popup to YouTube
-                console.log('Attempting to open YouTube in popup...');
-                
-                // Create a unique window name
-                const windowName = 'jaydl_youtube_auth_' + Date.now();
-                
-                // Open YouTube in a popup window
-                const popupWindow = window.open(
-                    'https://www.youtube.com',
-                    windowName,
-                    'width=800,height=600,left=100,top=100,location=yes,toolbar=yes,menubar=yes,scrollbars=yes,resizable=yes'
-                );
-                
-                if (!popupWindow || popupWindow.closed) {
-                    hideLoading();
-                    showError('❌ Popup blocked! Please allow popups for this site.');
-                    return;
-                }
-                
-                // Give user time to sign in
-                setTimeout(() => {
-                    hideLoading();
-                    
-                    // Show instructions
-                    showSuccess('✅ YouTube opened! Please:\n1. Sign in to YouTube (if not already)\n2. Keep the window open for 10 seconds');
-                    
-                    // After 10 seconds, try to get cookies using a hidden iframe
-                    setTimeout(async () => {
-                        showLoading('Collecting YouTube session...');
-                        
-                        try {
-                            // Try to get cookies using an iframe
-                            const cookies = await getCookiesViaIframe();
-                            
-                            if (cookies) {
-                                // Send cookies to backend
-                                await sendCookiesToBackend(cookies);
-                                
-                                // Close the popup
-                                if (popupWindow && !popupWindow.closed) {
-                                    popupWindow.close();
-                                }
-                            } else {
-                                hideLoading();
-                                
-                                // Offer manual cookie entry
-                                const tryManual = confirm('Automatic cookie collection failed. Would you like to enter cookies manually?');
-                                if (tryManual) {
-                                    manualYouTubeAuth();
-                                } else {
-                                    showError('Authentication cancelled.');
-                                }
-                                
-                                // Close the popup
-                                if (popupWindow && !popupWindow.closed) {
-                                    popupWindow.close();
-                                }
-                            }
-                        } catch (error) {
-                            hideLoading();
-                            console.error('Error in auth process:', error);
-                            showError('Authentication failed. Please try again.');
-                            
-                            // Close the popup
-                            if (popupWindow && !popupWindow.closed) {
-                                popupWindow.close();
-                            }
-                        }
-                    }, 10000); // Wait 10 seconds
-                }, 2000); // Initial wait
-                
-            } catch (error) {
-                hideLoading();
-                console.error('Authentication error:', error);
-                showError('Failed to start authentication. Please try again.');
-            }
-        }
-
-        // Get cookies via iframe method
-        async function getCookiesViaIframe() {
-            return new Promise((resolve) => {
-                try {
-                    console.log('Creating hidden iframe to YouTube...');
-                    
-                    // Create a hidden iframe
-                    const iframe = document.createElement('iframe');
-                    iframe.style.display = 'none';
-                    iframe.style.width = '1px';
-                    iframe.style.height = '1px';
-                    iframe.style.position = 'absolute';
-                    iframe.style.left = '-9999px';
-                    iframe.style.top = '-9999px';
-                    iframe.sandbox = 'allow-same-origin allow-scripts allow-forms';
-                    
-                    // Set the source to YouTube
-                    iframe.src = 'https://www.youtube.com';
-                    
-                    // Add iframe to document
-                    document.body.appendChild(iframe);
-                    
-                    // Wait for iframe to load
-                    iframe.onload = () => {
-                        console.log('YouTube iframe loaded, attempting to access cookies...');
-                        
-                        // Try to access cookies after a delay
-                        setTimeout(() => {
-                            try {
-                                // This will fail due to same-origin policy, but we try anyway
-                                const cookies = iframe.contentWindow.document.cookie;
-                                console.log('Cookies from iframe:', cookies);
-                                
-                                if (cookies && cookies.length > 10) {
-                                    // Clean up
-                                    document.body.removeChild(iframe);
-                                    resolve(cookies);
-                                } else {
-                                    // Try document.cookie in the main window
-                                    console.log('Checking main window cookies...');
-                                    const mainCookies = document.cookie;
-                                    
-                                    if (mainCookies && mainCookies.length > 10) {
-                                        document.body.removeChild(iframe);
-                                        resolve(mainCookies);
-                                    } else {
-                                        document.body.removeChild(iframe);
-                                        resolve(null);
-                                    }
-                                }
-                            } catch (e) {
-                                // Same-origin policy will block this, which is expected
-                                console.log('Cannot access iframe cookies due to security policy');
-                                document.body.removeChild(iframe);
-                                
-                                // Fall back to main window cookies
-                                const mainCookies = document.cookie;
-                                if (mainCookies && mainCookies.length > 10) {
-                                    resolve(mainCookies);
-                                } else {
-                                    resolve(null);
-                                }
-                            }
-                        }, 3000);
-                    };
-                    
-                    // Timeout after 10 seconds
-                    setTimeout(() => {
-                        if (document.body.contains(iframe)) {
-                            document.body.removeChild(iframe);
-                        }
-                        console.log('Cookie collection timeout');
-                        resolve(null);
-                    }, 10000);
-                    
-                } catch (error) {
-                    console.error('Error in getCookiesViaIframe:', error);
-                    resolve(null);
-                }
-            });
-        }
-
-        // Manual cookie entry function
-        function manualYouTubeAuth() {
-            const cookieInput = prompt(`📝 Manual YouTube Authentication
-
-If automatic authentication failed, you can manually paste YouTube cookies:
-
-1. Open https://www.youtube.com in a new tab
-2. Press F12 for Developer Tools
-3. Go to "Application" tab > "Cookies" > "https://www.youtube.com"
-4. Copy all cookies (right-click > Copy All)
-5. Paste them here:`);
-            
-            if (cookieInput && cookieInput.trim()) {
-                sendCookiesToBackend(cookieInput.trim());
-            } else {
-                showError('No cookies entered. Authentication cancelled.');
-            }
-        }
-
-        // Send cookies to backend
-        async function sendCookiesToBackend(cookieValue) {
-            showLoading('Finalizing authentication...');
-            
-            try {
-                console.log('Sending cookies to backend...');
-                
-                const response = await fetch(API_BASE + '/api/set-cookies', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        cookies: cookieValue
-                    })
+                const response = await fetch(`${API_BASE}/api/oauth2status`, {
+                    credentials: 'include' // Important for cookies/session
                 });
+                
+                if (!response.ok) {
+                    throw new Error('Failed to check auth status');
+                }
                 
                 const data = await response.json();
                 
-                if (data.success) {
-                    // Store authentication status
-                    localStorage.setItem('yt_authenticated', 'true');
-                    document.getElementById('ytAuthBtn').classList.add('authenticated');
+                if (data.authenticated) {
+                    isAuthenticated = true;
+                    currentUser = data.user_info || { user_name: 'Authenticated User' };
                     
-                    hideLoading();
-                    showSuccess('✅ YouTube authentication successful! You can now download YouTube videos.');
+                    // Update UI
+                    document.getElementById('authStatus').innerHTML = `
+                        <i class="fas fa-user-check"></i>
+                        <span>${currentUser.user_name}</span>
+                    `;
+                    document.getElementById('authStatus').className = 'auth-status authenticated';
+                    document.getElementById('authStatus').style.display = 'inline-flex';
                     
+                    document.getElementById('authBtn').innerHTML = `
+                        <i class="fas fa-sign-out-alt"></i>
+                        <span>Sign Out</span>
+                    `;
+                    document.getElementById('authBtn').className = 'navbar-auth-btn authenticated';
+                    document.getElementById('authBtn').onclick = logoutUser;
+                    
+                    console.log('User is authenticated:', currentUser);
+                    return true;
                 } else {
-                    hideLoading();
-                    showError('❌ Authentication failed: ' + (data.error || 'Unknown error'));
+                    isAuthenticated = false;
+                    currentUser = null;
+                    
+                    // Update UI
+                    document.getElementById('authStatus').innerHTML = `
+                        <i class="fas fa-user"></i>
+                        <span>Not Signed In</span>
+                    `;
+                    document.getElementById('authStatus').className = 'auth-status not-authenticated';
+                    document.getElementById('authStatus').style.display = 'inline-flex';
+                    
+                    document.getElementById('authBtn').innerHTML = `
+                        <i class="fab fa-google"></i>
+                        <span>Sign In</span>
+                    `;
+                    document.getElementById('authBtn').className = 'navbar-auth-btn';
+                    document.getElementById('authBtn').onclick = openAuthModal;
+                    
+                    console.log('User is not authenticated');
+                    return false;
                 }
             } catch (err) {
-                hideLoading();
-                console.error('Error sending cookies:', err);
-                showError('❌ Connection error: ' + err.message);
+                console.error('Error checking auth status:', err);
+                return false;
             }
         }
+
+        function openAuthModal() {
+            document.getElementById('authModal').classList.remove('hidden');
+            document.getElementById('authSuccess').style.display = 'none';
+            document.getElementById('authError').style.display = 'none';
+        }
+
+        function closeAuthModal() {
+            document.getElementById('authModal').classList.add('hidden');
+        }
+
+        async function startGoogleAuth() {
+            try {
+                // Get authorization URL from backend
+                const response = await fetch(`${API_BASE}/api/oauth2authorize`);
+                const data = await response.json();
+                
+                if (data.success && data.auth_url) {
+                    // Store current frontend URL for redirect back
+                    const currentUrl = window.location.href.split('#')[0];
+                    const redirectUri = `${data.auth_url}&redirect_uri=${encodeURIComponent(currentUrl)}`;
+                    
+                    // Open auth window
+                    const authWindow = window.open(
+                        redirectUri,
+                        'jaydl_auth',
+                        'width=600,height=700,left=100,top=100'
+                    );
+                    
+                    if (!authWindow) {
+                        showAuthError('Popup blocked! Please allow popups for this site.');
+                        return;
+                    }
+                    
+                    // Poll for window close
+                    const checkWindowClosed = setInterval(() => {
+                        if (authWindow.closed) {
+                            clearInterval(checkWindowClosed);
+                            // Check auth status after window closes
+                            setTimeout(() => {
+                                checkAuthStatus().then(authenticated => {
+                                    if (authenticated) {
+                                        showAuthSuccess();
+                                        setTimeout(() => {
+                                            closeAuthModal();
+                                            showSuccess('Successfully signed in with Google!');
+                                        }, 1500);
+                                    } else {
+                                        showAuthError('Authentication failed or was cancelled.');
+                                    }
+                                });
+                            }, 1000);
+                        }
+                    }, 500);
+                    
+                } else {
+                    showAuthError(data.error || 'Failed to start authentication');
+                }
+            } catch (err) {
+                console.error('Auth error:', err);
+                showAuthError('Authentication failed. Please try again.');
+            }
+        }
+
+        function showAuthSuccess() {
+            document.getElementById('authSuccess').style.display = 'block';
+            document.getElementById('authError').style.display = 'none';
+        }
+
+        function showAuthError(message) {
+            document.getElementById('authErrorMessage').textContent = message;
+            document.getElementById('authError').style.display = 'block';
+            document.getElementById('authSuccess').style.display = 'none';
+        }
+
+        async function logoutUser() {
+            try {
+                const response = await fetch(`${API_BASE}/api/oauth2logout`, {
+                    credentials: 'include'
+                });
+                
+                if (response.ok) {
+                    isAuthenticated = false;
+                    currentUser = null;
+                    
+                    // Update UI
+                    document.getElementById('authStatus').innerHTML = `
+                        <i class="fas fa-user"></i>
+                        <span>Not Signed In</span>
+                    `;
+                    document.getElementById('authStatus').className = 'auth-status not-authenticated';
+                    
+                    document.getElementById('authBtn').innerHTML = `
+                        <i class="fab fa-google"></i>
+                        <span>Sign In</span>
+                    `;
+                    document.getElementById('authBtn').className = 'navbar-auth-btn';
+                    document.getElementById('authBtn').onclick = openAuthModal;
+                    
+                    showSuccess('Successfully signed out!');
+                    console.log('User logged out');
+                }
+            } catch (err) {
+                console.error('Logout error:', err);
+                showError('Failed to sign out');
+            }
+        }
+
+        // Check URL hash for auth success callback
+        function checkUrlHash() {
+            if (window.location.hash === '#auth_success') {
+                // Remove hash from URL
+                history.replaceState(null, null, ' ');
+                
+                // Check auth status
+                checkAuthStatus().then(authenticated => {
+                    if (authenticated) {
+                        showSuccess('Successfully signed in with Google!');
+                    }
+                });
+            }
+        }
+
+        // Check hash on page load
+        checkUrlHash();
 
         // =============== NAVBAR & CHATBOT FUNCTIONS ===============
 
@@ -902,6 +1031,9 @@ If automatic authentication failed, you can manually paste YouTube cookies:
 
         // Chat button
         document.getElementById('chatBtn').addEventListener('click', openChatbot);
+
+        // YouTube auth button (now opens auth modal)
+        document.getElementById('ytAuthBtn').addEventListener('click', openAuthModal);
 
         // Close menu when clicking outside
         document.addEventListener('click', (e) => {

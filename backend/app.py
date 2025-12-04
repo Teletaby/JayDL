@@ -1074,126 +1074,218 @@ class InvidiousDownloader:
                 return {'success': False, 'error': 'Invalid YouTube URL'}
             
             video_id = video_id_match.group(1)
-            invidious_instance = os.getenv('INVIDIOUS_INSTANCE', 'https://invidious.io')
+            
+            # Try multiple Invidious instances
+            invidious_instances = [
+                os.getenv('INVIDIOUS_INSTANCE', 'https://yt.artemislena.eu'),
+                'https://yt.artemislena.eu',
+                'https://invidious.snopyta.org',
+                'https://invidious.kavin.rocks'
+            ]
             
             logger.info(f"Downloading YouTube video {video_id} via Invidious")
             
-            try:
-                # Get video info from Invidious API
-                info_url = f"{invidious_instance}/api/v1/videos/{video_id}"
-                logger.info(f"Fetching video info from: {info_url}")
+            video_info = None
+            working_instance = None
+            
+            # Try to get video info from one of the instances
+            for instance in invidious_instances:
+                try:
+                    info_url = f"{instance}/api/v1/videos/{video_id}"
+                    logger.info(f"Trying Invidious instance: {instance}")
+                    
+                    response = requests.get(info_url, timeout=10)
+                    response.raise_for_status()
+                    video_info = response.json()
+                    working_instance = instance
+                    
+                    logger.info(f"Successfully got video info from {instance}")
+                    break
+                except requests.exceptions.RequestException as e:
+                    logger.warning(f"Instance {instance} failed: {str(e)}")
+                    continue
+            
+            if not video_info or not working_instance:
+                logger.error("All Invidious instances failed, falling back to yt-dlp")
+                return self._download_youtube_ytdlp(url, quality, media_type)
+            
+            title = video_info.get('title', f'Video_{video_id}')
+            # Sanitize filename
+            title = re.sub(r'[<>:"/\\|?*]', '_', title)
+            
+            logger.info(f"Video title: {title}")
+            
+            if media_type == 'audio':
+                logger.info(f"Downloading audio using yt-dlp via YouTube directly")
                 
-                response = requests.get(info_url, timeout=10)
-                response.raise_for_status()
-                video_info = response.json()
+                # For audio, use yt-dlp with standard YouTube URL
+                output_template = os.path.join(self.base_dir, f'{title}__audio.%(ext)s')
                 
-                title = video_info.get('title', f'Video_{video_id}')
-                # Sanitize filename
-                title = re.sub(r'[<>:"/\\|?*]', '_', title)
+                cmd = [
+                    'yt-dlp',
+                    '--no-warnings',
+                    '-f', 'bestaudio',
+                    '-x',  # Extract audio
+                    '--audio-format', 'mp3',
+                    '--audio-quality', '192',
+                    '-o', output_template,
+                    f'https://www.youtube.com/watch?v={video_id}'
+                ]
                 
-                logger.info(f"Video title: {title}")
+                logger.info(f"Audio extraction command: {' '.join(cmd)}")
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
                 
-                # Get download formats
+                if result.returncode == 0:
+                    logger.info("Audio extraction completed successfully")
+                    return {
+                        'success': True,
+                        'title': title,
+                        'media_type': 'audio',
+                        'platform': 'youtube',
+                        'size': 'Unknown',
+                        'message': 'Audio extracted successfully from YouTube'
+                    }
+                else:
+                    logger.error(f"Audio extraction failed: {result.stderr}")
+                    error_msg = result.stderr[:200] if result.stderr else 'Unknown error'
+                    return {'success': False, 'error': f'Audio extraction failed: {error_msg}'}
+            else:
+                # For video, try direct download from Invidious
+                logger.info(f"Downloading video using Invidious")
+                
+                # Get format streams
                 formats = video_info.get('formatStreams', [])
                 if not formats:
-                    return {'success': False, 'error': 'No download formats available from Invidious'}
+                    logger.warning("No format streams from Invidious, using yt-dlp fallback")
+                    return self._download_youtube_ytdlp(url, quality, media_type)
                 
-                if media_type == 'audio':
-                    # Look for audio format or best video to extract audio from
-                    format_to_use = formats[0]  # Use first available format
-                    
-                    logger.info(f"Downloading audio using Invidious format")
-                    
-                    # Download the video using yt-dlp with the video ID (Invidious acts as proxy)
-                    # This will still use yt-dlp but through Invidious's infrastructure
-                    invidious_url = f"{invidious_instance}/watch?v={video_id}"
-                    
-                    output_template = os.path.join(self.base_dir, f'{title}__audio.%(ext)s')
-                    
-                    cmd = [
-                        'yt-dlp',
-                        '--no-warnings',
-                        '-f', 'bestaudio',
-                        '-x',  # Extract audio
-                        '--audio-format', 'mp3',
-                        '--audio-quality', '192',
-                        '-o', output_template,
-                        invidious_url
-                    ]
-                    
-                    logger.info(f"Audio extraction command: {' '.join(cmd)}")
-                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-                    
-                    if result.returncode == 0:
-                        logger.info("Audio extraction completed successfully")
-                        return {
-                            'success': True,
-                            'title': title,
-                            'media_type': 'audio',
-                            'platform': 'youtube',
-                            'size': 'Unknown',
-                            'message': 'Audio extracted successfully from Invidious'
-                        }
-                    else:
-                        logger.error(f"Audio extraction failed: {result.stderr}")
-                        return {'success': False, 'error': f'Audio extraction failed: {result.stderr[:200]}'}
-                else:
-                    # Download video - find best quality match
-                    target_quality = int(quality.rstrip('p')) if quality != 'best' else 1080
-                    
-                    # Find format closest to target quality
-                    best_format = None
-                    for fmt in formats:
-                        if fmt.get('resolution'):
-                            res_height = int(fmt['resolution'].split('p')[0])
-                            if best_format is None or res_height <= target_quality:
+                # Find best format matching quality
+                target_quality = int(quality.rstrip('p')) if quality != 'best' else 1080
+                best_format = None
+                
+                for fmt in formats:
+                    resolution_str = fmt.get('resolution', '')
+                    if resolution_str:
+                        try:
+                            res_height = int(resolution_str.split('p')[0])
+                            if best_format is None:
                                 best_format = fmt
+                            elif res_height <= target_quality:
+                                best_format = fmt
+                        except:
+                            continue
+                
+                if not best_format:
+                    best_format = formats[0]
+                
+                format_url = best_format.get('url')
+                if not format_url:
+                    logger.warning("No URL in format stream, using yt-dlp fallback")
+                    return self._download_youtube_ytdlp(url, quality, media_type)
+                
+                try:
+                    logger.info(f"Downloading from Invidious URL")
                     
-                    if not best_format:
-                        best_format = formats[0]
+                    video_response = requests.get(format_url, timeout=300, stream=True)
+                    video_response.raise_for_status()
                     
-                    format_url = best_format.get('url')
-                    if not format_url:
-                        return {'success': False, 'error': 'Could not get download URL from Invidious'}
+                    file_path = os.path.join(self.base_dir, f'{title}__720p.mp4')
                     
-                    logger.info(f"Downloading video from Invidious: {format_url[:100]}...")
+                    with open(file_path, 'wb') as f:
+                        for chunk in video_response.iter_content(chunk_size=8192):
+                            if chunk:
+                                f.write(chunk)
                     
-                    # Direct download from Invidious
-                    try:
-                        video_response = requests.get(format_url, timeout=300, stream=True)
-                        video_response.raise_for_status()
-                        
-                        # Save the file
-                        file_path = os.path.join(self.base_dir, f'{title}__720p.mp4')
-                        
-                        with open(file_path, 'wb') as f:
-                            for chunk in video_response.iter_content(chunk_size=8192):
-                                if chunk:
-                                    f.write(chunk)
-                        
-                        logger.info(f"Video saved to: {file_path}")
-                        
-                        return {
-                            'success': True,
-                            'title': title,
-                            'media_type': 'video',
-                            'platform': 'youtube',
-                            'quality': quality,
-                            'size': os.path.getsize(file_path),
-                            'message': f'Downloaded via Invidious ({quality} quality)'
-                        }
+                    file_size = os.path.getsize(file_path)
+                    logger.info(f"Video saved to: {file_path} ({file_size} bytes)")
                     
-                    except Exception as e:
-                        logger.error(f"Direct download from Invidious failed: {str(e)}")
-                        return {'success': False, 'error': f'Invidious download failed: {str(e)[:200]}'}
-            
-            except requests.exceptions.RequestException as e:
-                logger.error(f"Invidious API error: {str(e)}")
-                return {'success': False, 'error': f'Invidious API error: {str(e)[:200]}'}
+                    return {
+                        'success': True,
+                        'title': title,
+                        'media_type': 'video',
+                        'platform': 'youtube',
+                        'quality': quality,
+                        'size': file_size,
+                        'message': f'Downloaded via Invidious ({quality} quality)'
+                    }
+                
+                except Exception as e:
+                    logger.error(f"Invidious direct download failed: {str(e)}, trying yt-dlp fallback")
+                    return self._download_youtube_ytdlp(url, quality, media_type)
         
         except Exception as e:
             logger.error(f"YouTube Invidious download error: {str(e)}", exc_info=True)
             return {'success': False, 'error': f'Download failed: {str(e)}'}
+    
+    
+    def _download_youtube_ytdlp(self, url, quality='720', media_type='video'):
+        """Fallback: Download YouTube video using yt-dlp directly"""
+        try:
+            import subprocess
+            import json
+            
+            logger.info(f"Using yt-dlp fallback for YouTube download")
+            
+            video_id_match = __import__('re').search(r'(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})', url)
+            if video_id_match:
+                url = f'https://www.youtube.com/watch?v={video_id_match.group(1)}'
+            
+            if media_type == 'audio':
+                output_template = os.path.join(self.base_dir, f'%(title)s__audio.%(ext)s')
+                
+                cmd = [
+                    'yt-dlp',
+                    '--no-warnings',
+                    '-f', 'bestaudio',
+                    '-x',
+                    '--audio-format', 'mp3',
+                    '--audio-quality', '192',
+                    '-o', output_template,
+                    url
+                ]
+            else:
+                quality_map = {
+                    '1440': 'bestvideo[height<=1440]+bestaudio/best[height<=1440]/best',
+                    '1080': 'bestvideo[height<=1080]+bestaudio/best[height<=1080]/best',
+                    '720': 'bestvideo[height<=720]+bestaudio/best[height<=720]/best',
+                    '480': 'bestvideo[height<=480]+bestaudio/best[height<=480]/best',
+                    '360': 'bestvideo[height<=360]+bestaudio/best[height<=360]/best',
+                    'best': 'bestvideo+bestaudio/best'
+                }
+                format_spec = quality_map.get(quality, 'bestvideo+bestaudio/best')
+                output_template = os.path.join(self.base_dir, f'%(title)s__{quality}p.%(ext)s')
+                
+                cmd = [
+                    'yt-dlp',
+                    '--no-warnings',
+                    '-f', format_spec,
+                    '-o', output_template,
+                    url
+                ]
+            
+            logger.info(f"Running yt-dlp: {' '.join(cmd)}")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            
+            if result.returncode == 0:
+                logger.info("yt-dlp download completed successfully")
+                return {
+                    'success': True,
+                    'title': 'Video',
+                    'media_type': media_type,
+                    'platform': 'youtube',
+                    'quality': quality,
+                    'size': 'Unknown',
+                    'message': f'Downloaded via yt-dlp fallback ({quality} quality)'
+                }
+            else:
+                error_msg = result.stderr[:200] if result.stderr else 'Unknown error'
+                logger.error(f"yt-dlp failed: {error_msg}")
+                return {'success': False, 'error': f'yt-dlp download failed: {error_msg}'}
+        
+        except Exception as e:
+            logger.error(f"yt-dlp fallback error: {str(e)}", exc_info=True)
+            return {'success': False, 'error': f'Download failed: {str(e)}'}
+    
     
     
     def _download_spotify(self, url, quality='192', media_type='audio'):

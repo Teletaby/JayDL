@@ -138,6 +138,11 @@
                 return `${protocol}//${hostname}:5000`;
             }
             
+            // For Render deployment: frontend is jaydl-frontend.onrender.com, backend is jaydl-backend.onrender.com
+            if (hostname.includes('onrender.com')) {
+                return 'https://jaydl-backend.onrender.com';
+            }
+            
             // Otherwise, backend is on same host
             return `${protocol}//${hostname}${port ? ':' + port : ''}`;
         };

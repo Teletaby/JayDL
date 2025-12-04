@@ -527,7 +527,8 @@
                 const response = await fetch(`${API_BASE}/api/analyze`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ url })
+                    body: JSON.stringify({ url }),
+                    credentials: 'include'
                 });
 
                 if (!response.ok) {
@@ -708,7 +709,8 @@
                 const response = await fetch(`${API_BASE}/api/download`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(downloadPayload)
+                    body: JSON.stringify(downloadPayload),
+                    credentials: 'include'
                 });
 
                 if (!response.ok) {
@@ -770,28 +772,30 @@
         }
 
         async function loadPlatforms() {
-            try {
-                const response = await fetch(`${API_BASE}/api/platforms`);
-                const data = await response.json();
-                
-                if (data.success && data.platforms) {
-                    const grid = document.getElementById('platformsGrid');
-                    grid.innerHTML = data.platforms.map(p => `
-                        <div class="platform-card">
-                            <i class="${p.icon}" style="color: ${p.color}"></i>
-                            <div style="font-weight: 500; margin-top: 10px;">${p.name}</div>
-                            ${p.supported ? '<small style="color: #10b981;">✓ Supported</small>' : '<small style="color: #ef4444;">✗ Coming Soon</small>'}
-                            ${p.requires_auth ? '<br><small style="color: #f59e0b;">🔐 Requires Sign In</small>' : ''}
-                            ${p.rate_limited ? '<br><small style="color: #8b5cf6;">⏱️ Rate Limited</small>' : ''}
-                        </div>
-                    `).join('');
-                }
-            } catch (err) {
-                console.error('Failed to load platforms:', err);
-                // Show error message in platforms grid
-                document.getElementById('platformsGrid').innerHTML = '<p style="color: #666;">Unable to load platforms. Make sure the backend is running.</p>';
-            }
+    try {
+        const response = await fetch(`${API_BASE}/api/platforms`, {
+            credentials: 'include'  // ADD THIS LINE - it must be inside the options object
+        });
+        const data = await response.json();
+        
+        if (data.success && data.platforms) {
+            const grid = document.getElementById('platformsGrid');
+            grid.innerHTML = data.platforms.map(p => `
+                <div class="platform-card">
+                    <i class="${p.icon}" style="color: ${p.color}"></i>
+                    <div style="font-weight: 500; margin-top: 10px;">${p.name}</div>
+                    ${p.supported ? '<small style="color: #10b981;">✓ Supported</small>' : '<small style="color: #ef4444;">✗ Coming Soon</small>'}
+                    ${p.requires_auth ? '<br><small style="color: #f59e0b;">🔐 Requires Sign In</small>' : ''}
+                    ${p.rate_limited ? '<br><small style="color: #8b5cf6;">⏱️ Rate Limited</small>' : ''}
+                </div>
+            `).join('');
         }
+    } catch (err) {
+        console.error('Failed to load platforms:', err);
+        // Show error message in platforms grid
+        document.getElementById('platformsGrid').innerHTML = '<p style="color: #666;">Unable to load platforms. Make sure the backend is running.</p>';
+    }
+}
 
         function isValidUrl(string) {
             try {

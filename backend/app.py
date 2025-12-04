@@ -45,16 +45,16 @@ app.config['SESSION_COOKIE_DOMAIN'] = '.onrender.com'  # Add this for shared dom
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=1)
 app.config['SESSION_COOKIE_PATH'] = '/'  # Make sure it's accessible everywhere
 
-# Add CORS configuration
+# Add CORS configuration - UPDATED with correct frontend domain
 CORS(app,
      supports_credentials=True,
      origins=[
          "http://localhost:8000",
          "http://127.0.0.1:8000",
-         "https://jaydl-frontend.onrender.com",
+         "https://jaydl.onrender.com",
          "https://jaydl-backend.onrender.com"
      ],
-     allow_headers=["Content-Type", "Authorization", "Accept"],
+     allow_headers=["Content-Type", "Authorization", "Accept", "Origin"],
      expose_headers=["Set-Cookie"],
      methods=["GET", "POST", "OPTIONS", "PUT", "DELETE"])
 
@@ -69,7 +69,7 @@ GOOGLE_REDIRECT_URI = os.getenv('GOOGLE_REDIRECT_URI', 'http://localhost:5000/ap
 if os.getenv('FLASK_ENV') == 'production':
     app.config['SESSION_COOKIE_SECURE'] = True
     if not GOOGLE_REDIRECT_URI:
-        GOOGLE_REDIRECT_URI = 'https://your-domain.com/api/oauth2callback'
+        GOOGLE_REDIRECT_URI = 'https://jaydl-backend.onrender.com/api/oauth2callback'
 
 # Google API scopes for YouTube access
 SCOPES = [
@@ -788,9 +788,9 @@ class InvidiousDownloader:
                 'token': credentials['token'],
                 'refresh_token': credentials.get('refresh_token'),
                 'token_uri': credentials['token_uri'],
-                'client_id': credentials['client_id'],
-                'client_secret': credentials['client_secret'],
-                'scopes': credentials['scopes']
+                'client_id': credentials.client_id,
+                'client_secret': credentials.client_secret,
+                'scopes': credentials.scopes
             }
             
             with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
@@ -1387,8 +1387,8 @@ def authorize():
             scopes=SCOPES
         )
         
-        # Use the frontend URL as redirect for better UX
-        frontend_url = request.args.get('redirect_uri', 'https://jaydl-frontend.onrender.com')
+        # Use the frontend URL as redirect for better UX - UPDATED
+        frontend_url = request.args.get('redirect_uri', 'https://jaydl.onrender.com')
         flow.redirect_uri = GOOGLE_REDIRECT_URI
         
         authorization_url, state = flow.authorization_url(
@@ -1430,7 +1430,7 @@ def oauth2callback():
             state = request.args.get('state')
             if not state:
                 logger.error("No state parameter found in session or request")
-                return redirect(f"https://jaydl-frontend.onrender.com/#oauth_error=invalid_state")
+                return redirect(f"https://jaydl.onrender.com/#oauth_error=invalid_state")
         
         # Recreate the flow
         flow = google_auth_oauthlib.flow.Flow.from_client_config(
@@ -1470,12 +1470,13 @@ def oauth2callback():
         
         logger.info(f"User authenticated successfully via OAuth")
         
-        # Redirect back to frontend with success
-        return redirect("https://jaydl-frontend.onrender.com/#auth_success")
+        # Redirect back to frontend with success - UPDATED
+        return redirect("https://jaydl.onrender.com/#auth_success")
     
     except Exception as e:
         logger.error(f"OAuth callback error: {str(e)}")
-        return redirect(f"https://jaydl-frontend.onrender.com/#oauth_error={str(e)}")
+        # UPDATED
+        return redirect(f"https://jaydl.onrender.com/#oauth_error={str(e)}")
 
 @app.route('/api/oauth2status')
 def oauth_status():

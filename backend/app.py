@@ -5,140 +5,221 @@ import logging
 from datetime import datetime
 import requests
 import tempfile
+import threading
+import time
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Setup logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app)
 
 # Initialize downloader
-DOWNLOAD_DIR = os.path.join(os.path.dirname(__file__), 'downloads')
+# Use persistent disk on Render or temp directory locally
+DOWNLOAD_DIR = os.getenv('DOWNLOAD_DIR', os.path.join(os.path.dirname(__file__), 'downloads'))
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-class RapidAPIDownloader:
+class SpotifyRateLimitTracker:
+    """Track Spotify downloads and enforce daily rate limits"""
+    def __init__(self, limit_per_day=20):
+        self.limit_per_day = limit_per_day
+        self.rate_limit_file = os.path.join(DOWNLOAD_DIR, '.spotify_rate_limit.txt')
+        self.load_state()
+    
+    def load_state(self):
+        """Load rate limit state from file"""
+        if os.path.exists(self.rate_limit_file):
+            try:
+                with open(self.rate_limit_file, 'r') as f:
+                    lines = f.read().strip().split('\n')
+                    if len(lines) >= 2:
+                        self.last_reset_date = lines[0]
+                        self.download_count = int(lines[1])
+                        
+                        # Check if we need to reset (new day)
+                        today = datetime.now().strftime('%Y-%m-%d')
+                        if self.last_reset_date != today:
+                            self.download_count = 0
+                            self.last_reset_date = today
+                            self.save_state()
+                    else:
+                        self.reset()
+            except Exception as e:
+                logger.error(f"Error loading rate limit state: {e}")
+                self.reset()
+        else:
+            self.reset()
+    
+    def reset(self):
+        """Reset rate limit for new day"""
+        self.last_reset_date = datetime.now().strftime('%Y-%m-%d')
+        self.download_count = 0
+        self.save_state()
+    
+    def save_state(self):
+        """Save rate limit state to file"""
+        try:
+            with open(self.rate_limit_file, 'w') as f:
+                f.write(f"{self.last_reset_date}\n{self.download_count}")
+        except Exception as e:
+            logger.error(f"Error saving rate limit state: {e}")
+    
+    def increment_and_check(self):
+        """Increment download count and return (is_at_limit, remaining_downloads)"""
+        self.load_state()  # Refresh state
+        self.download_count += 1
+        self.save_state()
+        
+        remaining = max(0, self.limit_per_day - self.download_count)
+        is_at_limit = self.download_count >= self.limit_per_day
+        
+        return is_at_limit, remaining
+
+spotify_rate_limiter = SpotifyRateLimitTracker(limit_per_day=20)
+
+class InvidiousDownloader:
+    """Download videos using Invidious API (free, no rate limits)"""
+    
     def __init__(self, base_dir=None):
         self.base_dir = base_dir or tempfile.gettempdir()
         self.ensure_directories()
         
-        # Your RapidAPI credentials
-        self.api_key = "aeOfcs43b0msh12c1ac12ff2064ep1009f9jsn43915272a236"
-        self.api_host = "all-media-downloader1.p.rapidapi.com"
-        self.base_url = f"https://{self.api_host}/all"
-        
+        # Invidious instances (fallback list)
+        self.invidious_instances = [
+            'https://invidious.io',
+            'https://inv.vern.cc',
+            'https://invidious.snopyta.org',
+            'https://inv.nadeko.net'
+        ]
+        self.api_instance = os.getenv('INVIDIOUS_INSTANCE', self.invidious_instances[0])
+    
     def ensure_directories(self):
         os.makedirs(self.base_dir, exist_ok=True)
     
     def get_video_info(self, url):
-        """Get video information using RapidAPI"""
+        """Get video information using Invidious API for YouTube, yt-dlp for others"""
         try:
-            # Prepare the request
-            payload = {
-                'url': url
-            }
+            # Detect platform
+            platform = self.detect_platform(url)
             
-            headers = {
-                'X-RapidAPI-Key': self.api_key,
-                'X-RapidAPI-Host': self.api_host,
-                'Content-Type': 'application/x-www-form-urlencoded'
-            }
-            
-            logger.info(f"Calling RapidAPI for URL: {url}")
-            
-            # Make API request
-            response = requests.post(self.base_url, data=payload, headers=headers, timeout=30)
-            logger.info(f"RapidAPI response status: {response.status_code}")
-            
-            if response.status_code == 200:
-                data = response.json()
-                logger.info(f"RapidAPI response received")
-                return self._parse_api_response(data, url)
-            else:
-                error_msg = f"API returned status {response.status_code}"
-                try:
-                    error_data = response.json()
-                    error_msg = error_data.get('message', error_msg)
-                except:
-                    pass
-                return {'success': False, 'error': error_msg}
+            # For YouTube, use Invidious API
+            if platform == 'youtube':
+                # Extract video ID from URL
+                video_id = self._extract_video_id(url)
+                if not video_id:
+                    return {'success': False, 'error': 'Invalid YouTube URL'}
                 
-        except requests.exceptions.Timeout:
-            return {'success': False, 'error': 'API request timed out'}
-        except requests.exceptions.RequestException as e:
-            return {'success': False, 'error': f'Network error: {str(e)}'}
+                logger.info(f"Analyzing YouTube video ID: {video_id}")
+                
+                # Try each Invidious instance
+                for instance in self.invidious_instances:
+                    try:
+                        info_url = f"{instance}/api/v1/videos/{video_id}"
+                        logger.info(f"Trying Invidious instance: {instance}")
+                        response = requests.get(info_url, timeout=5)
+                        
+                        if response.status_code == 200:
+                            data = response.json()
+                            logger.info(f"Successfully got data from {instance}")
+                            return self._parse_invidious_response(data, video_id)
+                        else:
+                            logger.warning(f"{instance} returned {response.status_code}")
+                            
+                    except requests.exceptions.Timeout:
+                        logger.warning(f"{instance} timed out")
+                    except requests.exceptions.ConnectionError:
+                        logger.warning(f"{instance} connection failed")
+                    except Exception as e:
+                        logger.warning(f"{instance} error: {e}")
+                
+                # All instances failed, use fallback
+                logger.warning("All Invidious instances failed, using fallback info")
+                return self._get_fallback_info(video_id)
+            
+            # For other platforms (TikTok, Instagram, Twitter, Spotify), use yt-dlp
+            else:
+                logger.info(f"Analyzing {platform} URL: {url}")
+                return self._get_generic_platform_info(url, platform)
+            
         except Exception as e:
-            logger.error(f"RapidAPI error: {str(e)}")
-            return {'success': False, 'error': f'Service error: {str(e)}'}
+            logger.error(f"Error getting video info: {str(e)}")
+            return {'success': False, 'error': f'Failed to get video info: {str(e)}'}
     
-    def _parse_api_response(self, data, original_url):
-        """Parse the RapidAPI response"""
+    def _get_generic_platform_info(self, url, platform):
+        """Get video info from yt-dlp for non-YouTube platforms, or RapidAPI for Spotify"""
         try:
-            formats = []
+            import subprocess
+            import json
             
-            # Handle different response structures
-            if isinstance(data, dict):
-                # Check for video formats
-                if data.get('video'):
-                    video_data = data['video']
-                    if isinstance(video_data, dict):
-                        for quality, info in video_data.items():
-                            if isinstance(info, dict) and info.get('url'):
-                                formats.append({
-                                    'format_id': quality,
-                                    'resolution': quality.upper(),
-                                    'height': self._get_height_from_quality(quality),
-                                    'filesize': 'Unknown',
-                                    'format': f"{quality.upper()} - Video",
-                                    'type': 'video',
-                                    'url': info['url']
-                                })
-                
-                # Check for audio format
-                if data.get('audio') and isinstance(data['audio'], dict) and data['audio'].get('url'):
-                    formats.append({
-                        'format_id': 'audio',
-                        'resolution': 'Audio',
-                        'height': 0,
-                        'filesize': 'Unknown',
-                        'format': 'Audio Only',
-                        'type': 'audio',
-                        'url': data['audio']['url']
-                    })
-                
-                # Check for direct download URL
-                if not formats and data.get('download_url'):
-                    formats.append({
-                        'format_id': 'default',
-                        'resolution': 'Best',
-                        'height': 1080,
-                        'filesize': 'Unknown',
-                        'format': 'Best Quality',
-                        'type': 'video',
-                        'url': data['download_url']
-                    })
-                
-                # Get basic info
-                title = data.get('title', 'Unknown Title')
-                thumbnail = data.get('thumbnail')
-                duration = data.get('duration', 'Unknown')
-                uploader = data.get('author', data.get('uploader', 'Unknown'))
-                
+            # Handle Spotify with RapidAPI instead of yt-dlp
+            if platform == 'spotify':
+                return self._get_spotify_info(url)
+            
+            # For other platforms, use yt-dlp
+            # Try without cookies first, as they may not be available
+            cmd = ['yt-dlp', '--dump-json', '--no-warnings', url]
+            
+            logger.info(f"Getting {platform} info with command: {' '.join(cmd)}")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
+            
+            logger.info(f"yt-dlp return code: {result.returncode}")
+            logger.info(f"yt-dlp stdout length: {len(result.stdout)}")
+            if result.stderr:
+                logger.info(f"yt-dlp stderr: {result.stderr[:500]}")
+            
+            if result.returncode != 0:
+                error_msg = result.stderr or "Failed to get video info"
+                logger.error(f"yt-dlp error for {platform}: {error_msg}")
+                # Don't expose technical error details to user
+                return {'success': False, 'error': f'Unable to access this {platform} content. It may be private, deleted, or require authentication.'}
+            
+            if not result.stdout.strip():
+                logger.error(f"yt-dlp returned empty stdout for {platform}")
+                return {'success': False, 'error': f'Unable to access this {platform} content. It may be private or unavailable.'}
+            
+            try:
+                data = json.loads(result.stdout)
+            except json.JSONDecodeError as je:
+                logger.error(f"JSON parse error for {platform}: {je}")
+                logger.error(f"Raw output: {result.stdout[:500]}")
+                return {'success': False, 'error': f'Unable to parse {platform} content. Please try a different link.'}
+            
+            title = data.get('title', 'Unknown Title')
+            duration_seconds = data.get('duration', 0)
+            duration = self._format_duration(duration_seconds) if duration_seconds else 'Unknown'
+            
+            # Extract uploader/creator based on platform
+            if platform == 'tiktok':
+                uploader = data.get('uploader', data.get('creator', 'Unknown'))
+            elif platform == 'instagram':
+                uploader = data.get('uploader', data.get('creator', data.get('channel', 'Unknown')))
+            elif platform == 'twitter':
+                uploader = data.get('uploader', data.get('uploader_id', 'Unknown'))
             else:
-                return {
-                    'success': False,
-                    'error': 'Unexpected API response format'
-                }
+                uploader = data.get('uploader', 'Unknown')
             
-            # If no formats found, create a default option
-            if not formats:
-                formats.append({
-                    'format_id': 'best',
-                    'resolution': 'Best Quality',
-                    'height': 1080,
-                    'filesize': 'Unknown',
-                    'format': 'Best Available Quality',
-                    'type': 'video'
-                })
+            # Get thumbnail - try multiple fields
+            thumbnail = data.get('thumbnail', '')
+            if not thumbnail:
+                # Try alternative thumbnail fields
+                thumbnail = data.get('thumbnails', [{}])[0].get('url', '') if data.get('thumbnails') else ''
+            if not thumbnail:
+                thumbnail = data.get('thumb', '')
+            
+            logger.info(f"Got {platform} info: {title} by {uploader}")
+            logger.info(f"Thumbnail URL: {thumbnail[:100] if thumbnail else 'None'}")
+            
+            # Get available formats
+            formats = self._get_available_formats(url)
             
             return {
                 'success': True,
@@ -148,110 +229,953 @@ class RapidAPIDownloader:
                 'uploader': uploader,
                 'view_count': data.get('view_count', 0),
                 'formats': formats,
-                'platform': self.detect_platform(original_url)
+                'platform': platform,
+                'url': url
             }
             
+        except subprocess.TimeoutExpired:
+            logger.error(f"yt-dlp timeout for {platform}")
+            return {'success': False, 'error': f'Request timed out. The {platform} content took too long to load. Please try again.'}
         except Exception as e:
-            logger.error(f"Error parsing API response: {str(e)}")
-            return {'success': False, 'error': f'Failed to parse API response: {str(e)}'}
+            logger.error(f"Error getting {platform} info: {e}", exc_info=True)
+            return {'success': False, 'error': f'Unable to access this content. Please check the URL and try again.'}
     
-    def download_media(self, url, quality='best', media_type='video'):
-        """Download media using RapidAPI"""
+    def _get_spotify_info(self, url):
+        """Get Spotify track info using RapidAPI Spotify Downloader API"""
         try:
-            # First get video info to get download URLs
-            info_result = self.get_video_info(url)
-            if not info_result['success']:
-                return info_result
+            import requests
             
-            # Find the appropriate format
-            download_url = None
-            format_info = None
+            # Get RapidAPI credentials from environment
+            rapidapi_key = os.getenv('RAPIDAPI_KEY') or os.getenv('RAPIDAPI_SPOTIFY_KEY')
+            rapidapi_host = os.getenv('RAPIDAPI_HOST') or 'spotify-downloader9.p.rapidapi.com'
             
-            if media_type == 'audio':
-                # Look for audio format
-                for fmt in info_result['formats']:
-                    if fmt.get('type') == 'audio':
-                        download_url = fmt.get('url')
-                        format_info = fmt
-                        break
-            else:
-                # Look for video format
-                if quality == 'best':
-                    # Get the first available video format
-                    for fmt in info_result['formats']:
-                        if fmt.get('type') == 'video':
-                            download_url = fmt.get('url')
-                            format_info = fmt
-                            break
-                else:
-                    # Look for specific quality
-                    for fmt in info_result['formats']:
-                        if fmt.get('resolution', '').lower() == quality.lower():
-                            download_url = fmt.get('url')
-                            format_info = fmt
-                            break
+            if not rapidapi_key:
+                logger.error("RAPIDAPI_KEY not configured for Spotify")
+                return {'success': False, 'error': 'Spotify not configured. Please set RAPIDAPI_KEY environment variable.'}
             
-            # Fallback to first available format
-            if not download_url and info_result['formats']:
-                download_url = info_result['formats'][0].get('url')
-                format_info = info_result['formats'][0]
+            logger.info(f"Getting Spotify track info: {url}")
             
-            if not download_url:
-                return {'success': False, 'error': 'No download URL found for requested format'}
+            headers = {
+                "x-rapidapi-key": rapidapi_key,
+                "x-rapidapi-host": rapidapi_host
+            }
             
-            # Download the file
-            filename = self._download_file(download_url, info_result['title'], media_type)
+            api_url = f"https://{rapidapi_host}/downloadSong"
+            params = {"songId": url}
             
-            if filename:
-                return {
-                    'success': True,
-                    'title': info_result['title'],
-                    'filename': os.path.basename(filename),
-                    'filepath': filename,
-                    'file_size': self.format_file_size(os.path.getsize(filename)),
-                    'platform': info_result['platform'],
-                    'media_type': media_type,
-                    'quality': format_info.get('resolution', 'Unknown') if format_info else 'Unknown'
-                }
-            else:
-                return {'success': False, 'error': 'Failed to download file from RapidAPI'}
+            logger.info(f"Calling Spotify API: {api_url}")
+            response = requests.get(api_url, headers=headers, params=params, timeout=20)
+            
+            logger.info(f"API Response status: {response.status_code}")
+            
+            if response.status_code == 200:
+                response_data = response.json()
+                logger.info(f"Spotify API Response: {response_data}")
                 
+                if response_data.get('success'):
+                    # The actual track data is nested in the 'data' field
+                    data = response_data.get('data', {})
+                    title = data.get('title', 'Unknown Title')
+                    artist = data.get('artist', 'Unknown Artist')
+                    album = data.get('album', 'Unknown Album')
+                    thumbnail = data.get('cover', '')
+                    release_date = data.get('releaseDate', '')
+                    
+                    logger.info(f"Got Spotify info: {title} by {artist}")
+                    
+                    # For Spotify, we only support audio downloads
+                    formats = [
+                        {
+                            'format_id': 'bestaudio',
+                            'resolution': 'Best Audio',
+                            'height': 0,
+                            'filesize': 'Unknown',
+                            'format': 'Best Audio',
+                            'type': 'audio',
+                            'url': ''
+                        }
+                    ]
+                    
+                    return {
+                        'success': True,
+                        'title': f"{title} - {artist}",
+                        'duration': 'Unknown',  # Spotify API doesn't provide duration in this format
+                        'thumbnail': thumbnail,
+                        'uploader': artist,
+                        'view_count': 0,
+                        'formats': formats,
+                        'platform': 'spotify',
+                        'url': url,
+                        'album': album,
+                        'release_date': release_date
+                    }
+                else:
+                    error_msg = data.get('error') or data.get('message') or 'Unknown error'
+                    logger.error(f"Spotify API error: {error_msg}")
+                    return {'success': False, 'error': f'Spotify error: {error_msg}'}
+            else:
+                logger.error(f"Spotify API error: {response.status_code} - {response.text}")
+                return {'success': False, 'error': f'Failed to connect to Spotify API (Status: {response.status_code})'}
+                
+        except requests.Timeout:
+            logger.error("Spotify API request timed out")
+            return {'success': False, 'error': 'Spotify API request timed out'}
         except Exception as e:
-            logger.error(f"Download error: {str(e)}")
-            return {'success': False, 'error': f'Download failed: {str(e)}'}
+            logger.error(f"Error getting Spotify info: {e}", exc_info=True)
+            return {'success': False, 'error': f'Failed to analyze Spotify URL: {str(e)}'}
     
-    def _download_file(self, download_url, title, media_type):
-        """Download file from RapidAPI URL"""
+    def _parse_invidious_response(self, data, video_id):
+        """Parse Invidious API response"""
         try:
-            # Clean filename
-            clean_title = "".join(c for c in title if c.isalnum() or c in (' ', '-', '_')).rstrip()
-            file_extension = '.mp3' if media_type == 'audio' else '.mp4'
-            filename = os.path.join(self.base_dir, f"{clean_title}{file_extension}")
+            title = data.get('title', f'Video {video_id[:8]}...')
+            duration = self._format_duration(data.get('length', 0))
+            uploader = data.get('author', 'Unknown')
+            views = data.get('viewCount', 0)
             
-            # Download the file
-            response = requests.get(download_url, stream=True, timeout=60)
-            response.raise_for_status()
+            # Get thumbnail
+            thumbnail = f'https://i.ytimg.com/vi/{video_id}/maxresdefault.jpg'
             
-            with open(filename, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
+            logger.info(f"Got video info: {title} by {uploader}")
             
-            return filename
+            # Get actual available formats from yt-dlp
+            formats = self._get_available_formats(f'https://www.youtube.com/watch?v={video_id}')
+            
+            return {
+                'success': True,
+                'title': title,
+                'duration': duration,
+                'thumbnail': thumbnail,
+                'uploader': uploader,
+                'view_count': views,
+                'formats': formats,
+                'platform': 'youtube',
+                'video_id': video_id
+            }
+        except Exception as e:
+            logger.error(f"Error parsing Invidious response: {e}")
+            return self._get_fallback_info(video_id)
+    
+    def _get_fallback_info(self, video_id):
+        """Return basic info when API fails - try to get title from yt-dlp"""
+        try:
+            import subprocess
+            import json
+            
+            # Try to get video info from yt-dlp
+            cmd = ['yt-dlp', '--dump-json', '--no-warnings', f'https://www.youtube.com/watch?v={video_id}']
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            
+            title = f'Video {video_id[:8]}...'
+            duration = 'Unknown'
+            uploader = 'Unknown'
+            
+            if result.returncode == 0:
+                try:
+                    data = json.loads(result.stdout)
+                    title = data.get('title', title)
+                    # Extract duration in seconds and format it
+                    duration_seconds = data.get('duration', 0)
+                    if duration_seconds:
+                        duration = self._format_duration(duration_seconds)
+                    # Extract uploader/channel name
+                    uploader = data.get('uploader', data.get('channel', data.get('creator', 'Unknown')))
+                    logger.info(f"Got info from yt-dlp: {title} by {uploader} ({duration})")
+                except Exception as e:
+                    logger.warning(f"Error parsing yt-dlp data: {e}")
+        except Exception as e:
+            logger.error(f"Error getting fallback info: {e}")
+            title = f'Video {video_id[:8]}...'
+            duration = 'Unknown'
+            uploader = 'Unknown'
+        
+        # Get actual available formats from yt-dlp
+        formats = self._get_available_formats(f'https://www.youtube.com/watch?v={video_id}')
+        
+        return {
+            'success': True,
+            'title': title,
+            'duration': duration,
+            'thumbnail': f'https://i.ytimg.com/vi/{video_id}/maxresdefault.jpg',
+            'uploader': uploader,
+            'view_count': 0,
+            'formats': formats,
+            'platform': 'youtube',
+            'video_id': video_id
+        }
+    
+    def _get_default_formats(self):
+        """Return default format options"""
+        return [
+            {
+                'format_id': '2160',
+                'resolution': '2160p (4K)',
+                'height': 2160,
+                'filesize': 'Unknown',
+                'format': '2160p (4K)',
+                'type': 'video',
+                'container': 'mp4',
+                'url': ''
+            },
+            {
+                'format_id': '1440',
+                'resolution': '1440p (2K)',
+                'height': 1440,
+                'filesize': 'Unknown',
+                'format': '1440p (2K)',
+                'type': 'video',
+                'container': 'mp4',
+                'url': ''
+            },
+            {
+                'format_id': '1080',
+                'resolution': '1080p (Full HD)',
+                'height': 1080,
+                'filesize': 'Unknown',
+                'format': '1080p (Full HD)',
+                'type': 'video',
+                'container': 'mp4',
+                'url': ''
+            },
+            {
+                'format_id': '720',
+                'resolution': '720p (HD)',
+                'height': 720,
+                'filesize': 'Unknown',
+                'format': '720p (HD)',
+                'type': 'video',
+                'container': 'mp4',
+                'url': ''
+            },
+            {
+                'format_id': '480',
+                'resolution': '480p',
+                'height': 480,
+                'filesize': 'Unknown',
+                'format': '480p',
+                'type': 'video',
+                'container': 'mp4',
+                'url': ''
+            },
+            {
+                'format_id': '360',
+                'resolution': '360p',
+                'height': 360,
+                'filesize': 'Unknown',
+                'format': '360p',
+                'type': 'video',
+                'container': 'mp4',
+                'url': ''
+            },
+            {
+                'format_id': 'mp4',
+                'resolution': 'MP4 (Best)',
+                'height': 0,
+                'filesize': 'Unknown',
+                'format': 'MP4 (Best)',
+                'type': 'video',
+                'container': 'mp4',
+                'url': ''
+            },
+            {
+                'format_id': 'bestaudio',
+                'resolution': 'Best Audio',
+                'height': 0,
+                'filesize': 'Unknown',
+                'format': 'Best Audio',
+                'type': 'audio',
+                'url': ''
+            },
+            {
+                'format_id': '192',
+                'resolution': '192 kbps',
+                'height': 0,
+                'filesize': 'Unknown',
+                'format': '192 kbps',
+                'type': 'audio',
+                'url': ''
+            },
+            {
+                'format_id': '128',
+                'resolution': '128 kbps',
+                'height': 0,
+                'filesize': 'Unknown',
+                'format': '128 kbps',
+                'type': 'audio',
+                'url': ''
+            }
+        ]
+    
+    def _get_available_formats(self, url):
+        """Get actual available formats from yt-dlp"""
+        try:
+            import subprocess
+            import json
+            
+            # Get format information from yt-dlp
+            cmd = ['yt-dlp', '--dump-json', '--no-warnings', url]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+            
+            if result.returncode != 0:
+                logger.warning("Failed to get formats from yt-dlp, using defaults")
+                return self._get_default_formats()
+            
+            data = json.loads(result.stdout)
+            formats_data = data.get('formats', [])
+            
+            # Extract video resolutions with container info and filesizes
+            available_heights = {}  # {height: {container: filesize}}
+            audio_formats = {}  # {format_id: filesize}
+            audio_available = False
+            
+            for fmt in formats_data:
+                # Check for video formats with height
+                if fmt.get('vcodec') != 'none' and fmt.get('height'):
+                    height = fmt.get('height')
+                    container = fmt.get('ext', 'mp4').lower()  # Get container from ext field
+                    filesize = fmt.get('filesize') or fmt.get('filesize_approx') or 0
+                    
+                    if height not in available_heights:
+                        available_heights[height] = {}
+                    
+                    # Keep the largest filesize for each height+container combo
+                    if container not in available_heights[height] or filesize > available_heights[height][container]:
+                        available_heights[height][container] = filesize
+                
+                # Check for audio only formats
+                if fmt.get('acodec') != 'none' and fmt.get('vcodec') == 'none':
+                    audio_available = True
+                    format_id = fmt.get('format_id', 'audio')
+                    filesize = fmt.get('filesize') or fmt.get('filesize_approx') or 0
+                    audio_formats[format_id] = filesize
+            
+            logger.info(f"Available heights with containers: {available_heights}")
+            logger.info(f"Audio available: {audio_available}")
+            
+            # Build format list based on available heights
+            formats = []
+            
+            # Add video formats that are available (from all containers)
+            quality_options = [
+                ('2160', '2160p (4K)', 2160),
+                ('1440', '1440p (2K)', 1440),
+                ('1080', '1080p (Full HD)', 1080),
+                ('720', '720p (HD)', 720),
+                ('480', '480p', 480),
+                ('360', '360p', 360),
+            ]
+            
+            # Collect all available containers
+            all_containers = set()
+            for height_data in available_heights.values():
+                all_containers.update(height_data.keys())
+            
+            logger.info(f"Available containers: {all_containers}")
+            
+            # For each quality, add all available container versions
+            for quality_id, resolution, height in quality_options:
+                if height in available_heights:
+                    for container, filesize in available_heights[height].items():
+                        formats.append({
+                            'format_id': quality_id,
+                            'resolution': resolution,
+                            'height': height,
+                            'filesize': filesize if filesize > 0 else 'Unknown',
+                            'format': resolution,
+                            'type': 'video',
+                            'container': container,
+                            'url': ''
+                        })
+            
+            # Add best quality options for each container if videos available
+            if available_heights:
+                for container in all_containers:
+                    best_filesize = 0
+                    for height_data in available_heights.values():
+                        if container in height_data:
+                            best_filesize = max(best_filesize, height_data[container])
+                    
+                    formats.append({
+                        'format_id': container,  # Use container as format_id for best options
+                        'resolution': f'{container.upper()} (Best)',
+                        'height': 0,
+                        'filesize': best_filesize if best_filesize > 0 else 'Unknown',
+                        'format': f'{container.upper()} (Best)',
+                        'type': 'video',
+                        'container': container,
+                        'url': ''
+                    })
+            
+            # Add audio formats
+            if audio_available:
+                bestaudio_size = audio_formats.get('bestaudio', 0) or max(audio_formats.values()) if audio_formats else 0
+                formats.extend([
+                    {
+                        'format_id': 'bestaudio',
+                        'resolution': 'Best Audio',
+                        'height': 0,
+                        'filesize': bestaudio_size if bestaudio_size > 0 else 'Unknown',
+                        'format': 'Best Audio',
+                        'type': 'audio',
+                        'url': ''
+                    },
+                    {
+                        'format_id': '192',
+                        'resolution': '192 kbps',
+                        'height': 0,
+                        'filesize': 'Unknown',
+                        'format': '192 kbps',
+                        'type': 'audio',
+                        'url': ''
+                    },
+                    {
+                        'format_id': '128',
+                        'resolution': '128 kbps',
+                        'height': 0,
+                        'filesize': 'Unknown',
+                        'format': '128 kbps',
+                        'type': 'audio',
+                        'url': ''
+                    }
+                ])
+            
+            return formats if formats else self._get_default_formats()
             
         except Exception as e:
-            logger.error(f"File download error: {str(e)}")
+            logger.error(f"Error getting available formats: {e}")
+            return self._get_default_formats()
+    
+    def _format_duration(self, seconds):
+        """Format duration from seconds to HH:MM:SS"""
+        if not seconds:
+            return 'Unknown'
+        # Convert to int to handle both int and float values
+        seconds = int(seconds)
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        secs = seconds % 60
+        if hours > 0:
+            return f"{hours}:{minutes:02d}:{secs:02d}"
+        else:
+            return f"{minutes}:{secs:02d}"
+    
+    def _extract_video_id(self, url):
+        """Extract YouTube video ID from various URL formats"""
+        try:
+            from urllib.parse import urlparse, parse_qs
+            
+            parsed_url = urlparse(url)
+            
+            # Handle youtube.com/watch?v=XXX
+            if 'youtube.com' in parsed_url.netloc:
+                return parse_qs(parsed_url.query).get('v', [None])[0]
+            
+            # Handle youtu.be/XXX
+            elif 'youtu.be' in parsed_url.netloc:
+                return parsed_url.path.strip('/')
+            
+            # Handle youtube.com/shorts/XXX
+            elif 'shorts' in parsed_url.path:
+                return parsed_url.path.split('/')[-1]
+            
+            return None
+        except Exception as e:
+            logger.error(f"Error extracting video ID: {e}")
             return None
     
-    def _get_height_from_quality(self, quality):
-        """Extract height from quality string"""
-        quality_map = {
-            '144p': 144, '240p': 240, '360p': 360, '480p': 480,
-            '720p': 720, '1080p': 1080, '1440p': 1440, '2160p': 2160,
-            '144': 144, '240': 240, '360': 360, '480': 480,
-            '720': 720, '1080': 1080, '1440': 1440, '2160': 2160
-        }
-        return quality_map.get(quality.lower().replace('p', ''), 0)
+    def download_media(self, url, quality='720', media_type='video'):
+        """Download media using yt-dlp - works for all platforms including Spotify"""
+        try:
+            import subprocess
+            import json
+            
+            # Ensure quality is a string
+            quality = str(quality).strip()
+            media_type = str(media_type).strip()
+            
+            # Detect platform
+            platform = self.detect_platform(url)
+            logger.info(f"Starting download: Platform={platform}, Quality={quality}, Type={media_type}")
+            logger.info(f"Quality parameter received: '{quality}' (type: {type(quality).__name__}, length: {len(quality)})")
+            logger.info(f"Media type parameter received: '{media_type}' (type: {type(media_type).__name__})")
+            
+            # Handle Spotify downloads with RapidAPI
+            if platform == 'spotify':
+                return self._download_spotify(url, quality, media_type)
+            
+            
+            # Build yt-dlp command based on format
+            if media_type == 'audio':
+                # Download as MP3 audio only with specified quality bitrate
+                # Map quality codes to bitrate
+                audio_bitrate_map = {
+                    'bestaudio': '192',
+                    '192': '192',
+                    '128': '128'
+                }
+                audio_quality = audio_bitrate_map.get(quality, '192')
+                
+                # Include quality in output filename to avoid conflicts
+                output_template = os.path.join(self.base_dir, f'%(title)s__{audio_quality}kbps.%(ext)s')
+                
+                # For TikTok and some other platforms, we need to download the video and extract audio
+                # Try with bestaudio first (for platforms like YouTube that support it)
+                cmd = [
+                    'yt-dlp',
+                    '--no-warnings',
+                    '-U',  # Update yt-dlp to get latest fixes
+                    '-f', 'bestaudio',
+                    '-x',  # Extract audio
+                    '--audio-format', 'mp3',
+                    '--audio-quality', audio_quality,
+                    '-o', output_template,
+                    url
+                ]
+                
+                logger.info(f"Downloading audio ({audio_quality} kbps) from {platform}")
+                logger.info(f"Audio command: {' '.join(cmd)}")
+                
+                # Execute download with bestaudio first
+                logger.info(f"Running command: {' '.join(cmd)}")
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+                
+                # If bestaudio fails (e.g., TikTok), try downloading best video and extracting audio
+                if result.returncode != 0:
+                    logger.warning(f"bestaudio extraction failed: {result.stderr}")
+                    logger.info(f"Trying fallback: downloading best video and extracting audio")
+                    
+                    cmd = [
+                        'yt-dlp',
+                        '--no-warnings',
+                        '-U',
+                        '-f', 'best',
+                        '-x',  # Extract audio
+                        '--audio-format', 'mp3',
+                        '--audio-quality', audio_quality,
+                        '-o', output_template,
+                        url
+                    ]
+                    logger.info(f"Fallback audio command: {' '.join(cmd)}")
+                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            else:
+                # Download as video with specified quality
+                # Map quality to yt-dlp format - use bestvideo+bestaudio merger
+                quality_map = {
+                    '1440': 'bestvideo[height<=1440]+bestaudio/best[height<=1440]/best',
+                    '1080': 'bestvideo[height<=1080]+bestaudio/best[height<=1080]/best',
+                    '720': 'bestvideo[height<=720]+bestaudio/best[height<=720]/best',
+                    '480': 'bestvideo[height<=480]+bestaudio/best[height<=480]/best',
+                    '360': 'bestvideo[height<=360]+bestaudio/best[height<=360]/best',
+                    'mp4': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+                    'webm': 'bestvideo[ext=webm]+bestaudio[ext=webm]/best[ext=webm]/best',
+                    'best': 'bestvideo+bestaudio/best'
+                }
+                format_spec = quality_map.get(quality, 'bestvideo+bestaudio/best')
+                logger.info(f"Quality map keys available: {list(quality_map.keys())}")
+                logger.info(f"Looking up quality: '{quality}'")
+                logger.info(f"Quality in map: {quality in quality_map}")
+                
+                logger.info(f"Quality mapping: '{quality}' -> '{format_spec}'")
+                if format_spec == 'bestvideo+bestaudio/best':
+                    logger.warning(f"Quality '{quality}' not found in map, defaulting to 'best'")
+                
+                # Include quality in output filename to avoid conflicts
+                if quality == 'mp4':
+                    output_template = os.path.join(self.base_dir, f'%(title)s__mp4p.%(ext)s')
+                elif quality == 'webm':
+                    output_template = os.path.join(self.base_dir, f'%(title)s__webm.%(ext)s')
+                else:
+                    output_template = os.path.join(self.base_dir, f'%(title)s__{quality}p.%(ext)s')
+                
+                cmd = [
+                    'yt-dlp',
+                    '--no-warnings',
+                    '-U',  # Update yt-dlp to get latest fixes
+                    '-f', format_spec,
+                    '-o', output_template,
+                    '--quiet',  # Suppress verbose output
+                    url
+                ]
+                logger.info(f"Downloading video {quality} from {platform}")
+                logger.info(f"Format spec to be used: {format_spec}")
+            
+            # Execute download
+            logger.info(f"Running command: {' '.join(cmd)}")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            
+            if result.returncode == 0:
+                logger.info("Download completed successfully")
+                
+                # Find the downloaded file
+                try:
+                    # Get the title from yt-dlp info
+                    info_cmd = [
+                        'yt-dlp',
+                        '--dump-json',
+                        '--no-warnings',
+                        url
+                    ]
+                    info_result = subprocess.run(info_cmd, capture_output=True, text=True, timeout=30)
+                    
+                    filename = f'video_{platform}'
+                    
+                    if info_result.returncode == 0:
+                        try:
+                            info_data = json.loads(info_result.stdout)
+                            filename = info_data.get('title', f'video_{platform}')
+                            logger.info(f"Got title from info: {filename}")
+                        except Exception as parse_err:
+                            logger.warning(f"Error parsing info JSON: {parse_err}")
+                    else:
+                        logger.warning(f"Could not get info: {info_result.stderr}")
+                    
+                    file_ext = '.mp3' if media_type == 'audio' else '.mp4'
+                    
+                    # Determine expected file extensions based on media type
+                    if media_type == 'audio':
+                        expected_extensions = ('.mp3', '.m4a', '.aac', '.opus', '.vorbis')
+                    else:
+                        expected_extensions = ('.mp4', '.mkv', '.webm', '.m4a')
+                    if media_type == 'audio':
+                        audio_bitrate_map = {
+                            'bestaudio': '192',
+                            '192': '192',
+                            '128': '128'
+                        }
+                        audio_quality = audio_bitrate_map.get(quality, '192')
+                        quality_suffix = f"__{audio_quality}kbps"
+                    else:
+                        # For video formats, handle both numeric quality and format names
+                        if quality == 'mp4':
+                            quality_suffix = '__mp4p'
+                        elif quality == 'webm':
+                            quality_suffix = '__webm'
+                        else:
+                            quality_suffix = f"__{quality}p"
+                    
+                    logger.info(f"Looking for file with suffix: {quality_suffix}")
+                    logger.info(f"Expected filename: {filename}")
+                    logger.info(f"Expected extensions: {expected_extensions}")
+                    
+                    # Search for file with quality suffix in filename
+                    found_filepath = None
+                    for root, dirs, files in os.walk(self.base_dir):
+                        logger.info(f"Searching in: {root}")
+                        for file in files:
+                            logger.info(f"Checking file: {file}")
+                            # Look for file with the quality suffix in the name
+                            if quality_suffix in file and file.endswith(expected_extensions):
+                                full_path = os.path.join(root, file)
+                                logger.info(f"Found matching file: {full_path}")
+                                # Verify it's recent (within last 5 minutes)
+                                file_mtime = os.path.getmtime(full_path)
+                                current_time = time.time()
+                                if current_time - file_mtime < 300:  # 5 minutes
+                                    found_filepath = full_path
+                                    logger.info(f"File is recent, using it: {found_filepath}")
+                                    break
+                        if found_filepath:
+                            break
+                    
+                    # If not found by suffix, search by filename pattern
+                    if not found_filepath:
+                        logger.warning(f"File with quality suffix not found, searching by filename pattern")
+                        for root, dirs, files in os.walk(self.base_dir):
+                            for file in files:
+                                # Normalize filename for comparison
+                                file_normalized = file.replace(' ', '').replace('_', '').lower()
+                                filename_normalized = filename.replace(' ', '').replace('_', '').lower()
+                                
+                                if filename_normalized in file_normalized and file.endswith(('.mp4', '.mkv', '.webm', '.mp3', '.m4a')):
+                                    full_path = os.path.join(root, file)
+                                    file_mtime = os.path.getmtime(full_path)
+                                    current_time = time.time()
+                                    if current_time - file_mtime < 300:  # 5 minutes
+                                        found_filepath = full_path
+                                        logger.info(f"Found file by pattern: {found_filepath}")
+                                        break
+                            if found_filepath:
+                                break
+                    
+                    # Use found file or construct expected path
+                    if found_filepath:
+                        filepath = found_filepath
+                    else:
+                        # Last resort: look for any mp4/webm file recently created
+                        logger.warning(f"File not found by pattern, searching for any recent video file")
+                        for root, dirs, files in os.walk(self.base_dir):
+                            for file in files:
+                                if file.endswith(('.mp4', '.mkv', '.webm', '.m4a')):
+                                    full_path = os.path.join(root, file)
+                                    file_mtime = os.path.getmtime(full_path)
+                                    current_time = time.time()
+                                    if current_time - file_mtime < 60:  # 1 minute (very recent)
+                                        found_filepath = full_path
+                                        logger.info(f"Found recent video file: {found_filepath}")
+                                        break
+                            if found_filepath:
+                                break
+                        filepath = found_filepath if found_filepath else os.path.join(self.base_dir, f"{filename}{file_ext}")
+                    
+                    if os.path.exists(filepath):
+                        file_size = os.path.getsize(filepath)
+                        logger.info(f"File found: {filepath} ({file_size} bytes)")
+                        
+                        return {
+                            'success': True,
+                            'title': filename,
+                            'filename': os.path.basename(filepath),
+                            'filepath': filepath,
+                            'file_size': self.format_file_size(file_size),
+                            'download_url': f"/api/file/{os.path.basename(filepath)}",
+                            'platform': platform,
+                            'media_type': media_type,
+                            'quality': f'{quality}p' if media_type == 'video' else 'MP3'
+                        }
+                    else:
+                        logger.error(f"File not found at: {filepath}")
+                        # List what files are in the download directory
+                        logger.info(f"Files in {self.base_dir}:")
+                        for f in os.listdir(self.base_dir):
+                            logger.info(f"  - {f}")
+                        return {'success': True, 'message': 'Download completed', 'filename': 'video'}
+                        
+                except Exception as e:
+                    logger.error(f"Error getting file info: {e}", exc_info=True)
+                    return {'success': True, 'message': 'Download completed successfully', 'filename': 'video'}
+            
+            else:
+                error_msg = result.stderr or "Unknown error"
+                logger.error(f"Download failed: {error_msg}")
+                return {'success': False, 'error': f'Download failed: {error_msg}'}
+                
+        except subprocess.TimeoutExpired:
+            logger.error("Download timed out")
+            return {'success': False, 'error': 'Download timed out (>10 minutes)'}
+        except FileNotFoundError:
+            logger.error("yt-dlp not found. Please install: pip install yt-dlp")
+            return {'success': False, 'error': 'yt-dlp not installed. Run: pip install yt-dlp'}
+        except Exception as e:
+            logger.error(f"Download error: {str(e)}", exc_info=True)
+            return {'success': False, 'error': f'Download failed: {str(e)}'}
+            
+            # Execute download
+            logger.info(f"Running command: {' '.join(cmd)}")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            
+            if result.returncode == 0:
+                logger.info("Download completed successfully")
+                
+                # Find the downloaded file
+                try:
+                    # Get the title from yt-dlp info
+                    info_cmd = [
+                        'yt-dlp',
+                        '--dump-json',
+                        '--no-warnings',
+                        url
+                    ]
+                    info_result = subprocess.run(info_cmd, capture_output=True, text=True, timeout=30)
+                    
+                    if info_result.returncode == 0:
+                        info_data = json.loads(info_result.stdout)
+                        filename = info_data.get('title', f'video_{video_id}')
+                        file_ext = '.mp3' if media_type == 'audio' else '.mp4'
+                        
+                        # Build expected filename with quality suffix
+                        if media_type == 'audio':
+                            audio_bitrate_map = {
+                                'bestaudio': '192',
+                                '192': '192',
+                                '128': '128'
+                            }
+                            audio_quality = audio_bitrate_map.get(quality, '192')
+                            quality_suffix = f"__{audio_quality}kbps"
+                        else:
+                            # For video formats, handle both numeric quality and format names
+                            if quality == 'mp4':
+                                quality_suffix = '__mp4p'
+                            else:
+                                quality_suffix = f"__{quality}p"
+                        
+                        # Search for file with quality suffix in filename
+                        found_filepath = None
+                        for root, dirs, files in os.walk(self.base_dir):
+                            for file in files:
+                                # Look for file with the quality suffix in the name
+                                if quality_suffix in file and filename.replace(' ', '') in file.replace(' ', '') and file.endswith(('.mp4', '.mkv', '.webm', '.mp3')):
+                                    found_filepath = os.path.join(root, file)
+                                    logger.info(f"Found file with quality suffix: {found_filepath}")
+                                    break
+                            if found_filepath:
+                                break
+                        
+                        # If not found, search without quality suffix as fallback
+                        if not found_filepath:
+                            logger.warning(f"File with quality suffix not found, searching without suffix")
+                            for root, dirs, files in os.walk(self.base_dir):
+                                for file in files:
+                                    if filename.replace(' ', '') in file.replace(' ', '') and file.endswith(('.mp4', '.mkv', '.webm', '.mp3')):
+                                        found_filepath = os.path.join(root, file)
+                                        break
+                                if found_filepath:
+                                    break
+                        
+                        filepath = found_filepath if found_filepath else os.path.join(self.base_dir, f"{filename}{file_ext}")
+                        
+                        if os.path.exists(filepath):
+                            file_size = os.path.getsize(filepath)
+                            logger.info(f"File found: {filepath} ({file_size} bytes)")
+                            
+                            return {
+                                'success': True,
+                                'title': filename,
+                                'filename': os.path.basename(filepath),
+                                'filepath': filepath,
+                                'file_size': self.format_file_size(file_size),
+                                'download_url': f"/api/file/{os.path.basename(filepath)}",
+                                'platform': 'youtube',
+                                'media_type': media_type,
+                                'quality': f'{quality}p' if media_type == 'video' else 'MP3'
+                            }
+                except Exception as e:
+                    logger.error(f"Error getting file info: {e}")
+                
+                return {'success': True, 'message': 'Download completed', 'filename': 'video'}
+            else:
+                error_msg = result.stderr or "Unknown error"
+                logger.error(f"Download failed: {error_msg}")
+                return {'success': False, 'error': f'Download failed: {error_msg}'}
+                
+        except subprocess.TimeoutExpired:
+            logger.error("Download timed out")
+            return {'success': False, 'error': 'Download timed out (>10 minutes)'}
+        except FileNotFoundError:
+            logger.error("yt-dlp not found. Please install: pip install yt-dlp")
+            return {'success': False, 'error': 'yt-dlp not installed. Run: pip install yt-dlp'}
+        except Exception as e:
+            logger.error(f"Download error: {str(e)}", exc_info=True)
+            return {'success': False, 'error': f'Download failed: {str(e)}'}
+    
+    
+    def _download_spotify(self, url, quality='192', media_type='audio'):
+        """Download Spotify track using RapidAPI Spotify Downloader API"""
+        try:
+            import requests
+            
+            # Check rate limit
+            is_at_limit, remaining = spotify_rate_limiter.increment_and_check()
+            
+            logger.info(f"Spotify download #{spotify_rate_limiter.download_count}/20. Remaining: {remaining}")
+            
+            if is_at_limit:
+                return {
+                    'success': False,
+                    'error': 'Spotify rate limit reached (20 downloads per day)',
+                    'rate_limit_hit': True,
+                    'remaining_downloads': 0,
+                    'resets_at': f"{datetime.now().strftime('%Y-%m-%d')} 00:00:00 (next day)"
+                }
+            
+            # Get RapidAPI credentials from environment
+            rapidapi_key = os.getenv('RAPIDAPI_KEY') or os.getenv('RAPIDAPI_SPOTIFY_KEY')
+            rapidapi_host = os.getenv('RAPIDAPI_HOST') or 'spotify-downloader9.p.rapidapi.com'
+            
+            if not rapidapi_key:
+                logger.error("RAPIDAPI_KEY not configured for Spotify download")
+                return {'success': False, 'error': 'Spotify download not configured. Please set RAPIDAPI_KEY environment variable.'}
+            
+            logger.info(f"Downloading Spotify track: {url}")
+            logger.info(f"Using RapidAPI host: {rapidapi_host}")
+            
+            # Call RapidAPI Spotify downloader
+            headers = {
+                "x-rapidapi-key": rapidapi_key,
+                "x-rapidapi-host": rapidapi_host
+            }
+            
+            # Build API request - pass the Spotify URL as songId parameter
+            api_url = f"https://{rapidapi_host}/downloadSong"
+            params = {"songId": url}
+            
+            logger.info(f"Calling API: {api_url} with params: {params}")
+            
+            response = requests.get(api_url, headers=headers, params=params, timeout=30)
+            
+            logger.info(f"API Response status: {response.status_code}")
+            
+            if response.status_code == 200:
+                response_data = response.json()
+                logger.info(f"API Response: {response_data}")
+                
+                if response_data.get('success'):
+                    # Extract data from nested 'data' field
+                    data = response_data.get('data', {})
+                    download_url = data.get('downloadLink')
+                    title = data.get('title', 'spotify_track')
+                    artist = data.get('artist', 'Unknown')
+                    
+                    if download_url:
+                        logger.info(f"Got download URL: {download_url}")
+                        
+                        # Download the file
+                        logger.info(f"Downloading from: {download_url}")
+                        file_response = requests.get(download_url, timeout=60, headers={'User-Agent': 'Mozilla/5.0'})
+                        
+                        if file_response.status_code == 200:
+                            # Save file - clean filename first before adding extension
+                            filename_base = f"{title} - {artist}"
+                            # Clean filename (remove special characters)
+                            filename_base = "".join(c for c in filename_base if c.isalnum() or c in (' ', '-', '_')).strip()
+                            filename = f"{filename_base}.mp3"
+                            filepath = os.path.join(self.base_dir, filename)
+                            
+                            with open(filepath, 'wb') as f:
+                                f.write(file_response.content)
+                            
+                            file_size = os.path.getsize(filepath)
+                            logger.info(f"Spotify track downloaded: {filepath} ({file_size} bytes)")
+                            
+                            return {
+                                'success': True,
+                                'title': f"{title} - {artist}",
+                                'filename': os.path.basename(filepath),
+                                'filepath': filepath,
+                                'file_size': self.format_file_size(file_size),
+                                'download_url': f"/api/file/{os.path.basename(filepath)}",
+                                'platform': 'spotify',
+                                'media_type': 'audio',
+                                'quality': 'MP3',
+                                'remaining_downloads': max(0, 20 - spotify_rate_limiter.download_count)
+                            }
+                        else:
+                            logger.error(f"Failed to download file from URL: {file_response.status_code}")
+                            return {'success': False, 'error': 'Failed to download Spotify track file'}
+                    else:
+                        logger.error(f"No download URL in response: {data}")
+                        return {'success': False, 'error': 'Could not find download link for this Spotify track'}
+                else:
+                    error_msg = response_data.get('error') or response_data.get('message') or 'Unknown error'
+                    logger.error(f"API error: {error_msg}")
+                    return {'success': False, 'error': f'Spotify API error: {error_msg}'}
+            else:
+                logger.error(f"API error: {response.status_code} - {response.text}")
+                return {'success': False, 'error': f'Failed to connect to Spotify API (Status: {response.status_code})'}
+                
+        except requests.Timeout:
+            logger.error("Spotify API request timed out")
+            return {'success': False, 'error': 'Spotify API request timed out'}
+        except Exception as e:
+            logger.error(f"Error downloading Spotify track: {e}", exc_info=True)
+            return {'success': False, 'error': f'Failed to download Spotify track: {str(e)}'}
+    
+    def format_file_size(self, bytes_size):
+        if not bytes_size:
+            return "Unknown"
+        for unit in ['B', 'KB', 'MB', 'GB']:
+            if bytes_size < 1024.0:
+                return f"{bytes_size:.2f} {unit}"
+            bytes_size /= 1024.0
+        return f"{bytes_size:.2f} TB"
     
     def detect_platform(self, url):
         url_lower = url.lower()
@@ -267,18 +1191,9 @@ class RapidAPIDownloader:
             return 'spotify'
         else:
             return 'generic'
-    
-    def format_file_size(self, bytes_size):
-        if not bytes_size:
-            return "Unknown"
-        for unit in ['B', 'KB', 'MB', 'GB']:
-            if bytes_size < 1024.0:
-                return f"{bytes_size:.2f} {unit}"
-            bytes_size /= 1024.0
-        return f"{bytes_size:.2f} TB"
 
-# Initialize the downloader
-downloader = RapidAPIDownloader(base_dir=DOWNLOAD_DIR)
+# Initialize the downloader (using Invidious API + yt-dlp)
+downloader = InvidiousDownloader(base_dir=DOWNLOAD_DIR)
 
 @app.route('/')
 def index():
@@ -440,32 +1355,60 @@ def health_check():
         'timestamp': datetime.now().isoformat()
     })
 
-# Cleanup old files periodically
-@app.before_request
-def cleanup_old_files():
-    """Clean up files older than 1 hour"""
-    try:
-        if not os.path.exists(DOWNLOAD_DIR):
-            return
-        
-        current_time = datetime.now().timestamp()
-        for filename in os.listdir(DOWNLOAD_DIR):
-            filepath = os.path.join(DOWNLOAD_DIR, filename)
+# Cleanup old files periodically in a background thread
+def cleanup_old_files_background():
+    """Clean up files older than 2 hours in background thread"""
+    while True:
+        try:
+            # Sleep for 30 minutes before cleaning
+            time.sleep(1800)
             
-            # Skip if not a file
-            if not os.path.isfile(filepath):
+            if not os.path.exists(DOWNLOAD_DIR):
                 continue
             
-            # Check file age
-            file_age = current_time - os.path.getmtime(filepath)
+            current_time = datetime.now().timestamp()
+            cleaned_count = 0
             
-            # Delete if older than 1 hour
-            if file_age > 3600:
-                os.remove(filepath)
-                logger.info(f"Cleaned up old file: {filename}")
-    
-    except Exception as e:
-        logger.error(f"Error in cleanup: {str(e)}")
+            for filename in os.listdir(DOWNLOAD_DIR):
+                try:
+                    filepath = os.path.join(DOWNLOAD_DIR, filename)
+                    
+                    # Skip if not a file
+                    if not os.path.isfile(filepath):
+                        continue
+                    
+                    # Check file age (clean up files older than 2 hours)
+                    file_age = current_time - os.path.getmtime(filepath)
+                    
+                    # Delete if older than 2 hours
+                    if file_age > 7200:
+                        os.remove(filepath)
+                        cleaned_count += 1
+                        logger.info(f"Cleaned up old file: {filename}")
+                except Exception as e:
+                    logger.error(f"Error processing file {filename}: {str(e)}")
+            
+            if cleaned_count > 0:
+                logger.info(f"Cleanup completed: removed {cleaned_count} old files")
+        except Exception as e:
+            logger.error(f"Error in cleanup loop: {str(e)}")
+
+# Start cleanup thread on app startup (daemon thread so it doesn't block shutdown)
+try:
+    cleanup_thread = threading.Thread(target=cleanup_old_files_background, daemon=True)
+    cleanup_thread.daemon = True
+    cleanup_thread.start()
+    logger.info("Started background cleanup thread")
+except Exception as e:
+    logger.error(f"Failed to start cleanup thread: {str(e)}")
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    # Get port from environment variable or default to 5000
+    port = int(os.getenv('PORT', 5000))
+    debug = os.getenv('FLASK_ENV', 'production') == 'development'
+    
+    logger.info(f"Starting JayDL Backend on port {port}")
+    logger.info(f"Debug mode: {debug}")
+    logger.info(f"Download directory: {DOWNLOAD_DIR}")
+    
+    app.run(debug=debug, host='0.0.0.0', port=port)

@@ -651,56 +651,52 @@
         }
         
         function enableYouTubeAuth() {
-            // Ask user for permission to collect YouTube cookies
-            const permission = confirm(`🔐 YouTube Authentication Required
+            // Show permission dialog
+            const permission = confirm(`🔐 YouTube Authentication
 
 JayDL would like to collect your YouTube session cookies to enable video downloads.
 
 This allows us to:
 ✓ Download YouTube videos without bot detection
 ✓ Bypass authentication requirements
-✓ Provide seamless downloads for everyone
 
-Your cookies are stored only in your browser and never shared.
+Your cookies are stored locally in your browser.
 
-Do you want to enable YouTube downloads?`);
+Allow YouTube authentication?`);
             
             if (!permission) {
                 return;
             }
             
-            // Try to collect cookies using Cookie Store API
+            // Try to collect cookies automatically
             collectYouTubeCookies();
         }
         
         async function collectYouTubeCookies() {
             try {
-                // Check if Cookie Store API is available
-                if (!navigator.cookieStore) {
-                    // Fallback: Ask user to manually provide cookies
-                    manualCookieCollection();
-                    return;
+                // Check if Cookie Store API is available (modern browsers)
+                if (navigator.cookieStore) {
+                    // Try to get YouTube cookies automatically
+                    const cookies = await navigator.cookieStore.getAll();
+                    
+                    // Look for relevant YouTube authentication cookies
+                    const authCookies = cookies.filter(c => 
+                        c.domain && (c.domain.includes('youtube.com') || c.domain.includes('.youtube.com')) &&
+                        (c.name.includes('PSID') || c.name.includes('SameSite'))
+                    );
+                    
+                    if (authCookies.length > 0) {
+                        // Send all YouTube cookies to backend
+                        const cookieString = authCookies.map(c => `${c.name}=${c.value}`).join('; ');
+                        sendCookiesToBackend(cookieString);
+                        return;
+                    }
+                } else {
+                    console.log('Cookie Store API not available, using fallback');
                 }
                 
-                // Request permission to access cookies
-                try {
-                    // Get all cookies for youtube.com
-                    const cookies = await navigator.cookieStore.getAll({
-                        name: '__Secure-1PSID',
-                        url: 'https://www.youtube.com'
-                    });
-                    
-                    if (cookies && cookies.length > 0) {
-                        const cookieValue = cookies[0].value;
-                        sendCookiesToBackend(cookieValue);
-                    } else {
-                        // No cookies found, ask user to open YouTube first
-                        alert('No YouTube cookies found.\n\nPlease:\n1. Open YouTube.com in another tab\n2. Log in to your YouTube account\n3. Come back and click "Enable YouTube Downloads" again');
-                    }
-                } catch (e) {
-                    console.log('Cookie Store API error:', e);
-                    manualCookieCollection();
-                }
+                // Fallback: ask user to open YouTube to create cookies
+                manualCookieCollection();
             } catch (error) {
                 console.error('Error collecting cookies:', error);
                 manualCookieCollection();
@@ -709,18 +705,19 @@ Do you want to enable YouTube downloads?`);
         
         function manualCookieCollection() {
             // Fallback to manual cookie collection
-            const instructions = `
-Your browser doesn't support automatic cookie collection.
+            const instructions = `Your browser requires manual cookie collection.
 
-Please follow these steps:
+Steps:
+1. Open YouTube.com in another tab
+2. Make sure you're logged in
+3. Return here and try again
 
-1. Open YouTube.com and make sure you're logged in
-2. Press F12 to open Developer Tools
-3. Go to "Application" tab
-4. Click "Cookies" → "https://www.youtube.com"
-5. Find the cookie "__Secure-1PSID" and copy its value
-6. Paste it below:
-            `.trim();
+If this doesn't work, manually copy a YouTube cookie:
+1. Press F12 (Developer Tools)
+2. Go to "Application" tab
+3. Click "Cookies" → "youtube.com"
+4. Copy "__Secure-1PSID" value
+5. Paste here:`;
             
             const cookie = prompt(instructions);
             if (cookie && cookie.trim()) {
@@ -729,6 +726,8 @@ Please follow these steps:
         }
         
         function sendCookiesToBackend(cookieValue) {
+            showLoading('Authenticating with YouTube...');
+            
             fetch(API_BASE + '/api/set-cookies', {
                 method: 'POST',
                 headers: {
@@ -740,16 +739,18 @@ Please follow these steps:
             })
             .then(res => res.json())
             .then(data => {
+                hideLoading();
                 if (data.success) {
                     localStorage.setItem('yt_authenticated', 'true');
                     document.getElementById('ytAuthBtn').classList.add('authenticated');
-                    alert('✓ YouTube authentication successful!\n\nYou can now download YouTube videos.');
+                    showSuccess('✓ YouTube authentication successful!');
                 } else {
-                    alert('✗ Authentication failed:\n' + data.error);
+                    showError('✗ Authentication failed: ' + (data.error || 'Unknown error'));
                 }
             })
             .catch(err => {
-                alert('✗ Error connecting to server:\n' + err.message);
+                hideLoading();
+                showError('✗ Error: ' + err.message);
             });
         }
         

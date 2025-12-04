@@ -676,11 +676,11 @@ Allow YouTube authentication?`);
             // Show permission dialog
             const permission = confirm(`🔐 YouTube Authentication
 
-JayDL will use your YouTube session to download videos.
+JayDL will enable YouTube video downloads using your session.
 
 This requires you to:
 ✓ Be logged into YouTube in your browser
-✓ Click "Yes" to proceed
+✓ Click "Yes" to authorize
 
 Allow YouTube authentication?`);
             
@@ -688,46 +688,127 @@ Allow YouTube authentication?`);
                 return;
             }
             
-            // Automatically authenticate
+            // Start authentication
             authenticateYouTube();
         }
         
         async function authenticateYouTube() {
-            showLoading('Activating YouTube authentication...');
+            showLoading('Preparing YouTube authentication...');
             
-            // Try to detect if user is logged into YouTube
-            // by checking if we can access YouTube in a hidden way
+            // First, try to get cookies directly if available
+            const cookies = await tryGetCookiesDirectly();
+            if (cookies) {
+                hideLoading();
+                sendCookiesToBackend(cookies);
+                return;
+            }
+            
+            // If direct method fails, open YouTube in a hidden iframe to trigger cookie setting
+            hideLoading();
+            await triggerYouTubeCookieSync();
+        }
+        
+        async function tryGetCookiesDirectly() {
             try {
+                // Method 1: Cookie Store API
                 if (navigator.cookieStore) {
-                    // Use Cookie Store API to get YouTube cookies
                     const allCookies = await navigator.cookieStore.getAll();
                     const youtubeCookies = allCookies.filter(c => 
                         c.domain && (c.domain.includes('youtube') || c.domain.includes('google'))
                     );
                     
                     if (youtubeCookies.length > 0) {
-                        const cookieString = youtubeCookies.map(c => `${c.name}=${c.value}`).join('; ');
-                        hideLoading();
-                        sendCookiesToBackend(cookieString);
-                        return;
+                        console.log('Found YouTube cookies via Cookie Store API');
+                        return youtubeCookies.map(c => `${c.name}=${c.value}`).join('; ');
                     }
                 }
+            } catch (e) {
+                console.log('Cookie Store API error:', e);
+            }
+            
+            // Method 2: Document.cookie (if same-origin)
+            if (document.cookie && document.cookie.length > 50) {
+                console.log('Found cookies in document.cookie');
+                return document.cookie;
+            }
+            
+            return null;
+        }
+        
+        async function triggerYouTubeCookieSync() {
+            return new Promise((resolve) => {
+                showLoading('Opening YouTube to sync your session...');
                 
-                // If Cookie Store API fails, try document.cookie
-                if (document.cookie && document.cookie.length > 20) {
+                // Open YouTube in a popup - user might need to interact
+                const youtubeWindow = window.open('https://www.youtube.com/feed/subscriptions', 'yt_sync', 'width=600,height=400');
+                
+                if (!youtubeWindow) {
                     hideLoading();
-                    sendCookiesToBackend(document.cookie);
+                    showError('Popup blocked! Please allow popups and try again.');
+                    resolve();
                     return;
                 }
                 
-                hideLoading();
-                showError('YouTube cookies not found. Please make sure you\'re logged into YouTube in your browser and try again.');
+                let checkCount = 0;
+                const maxChecks = 30; // 15 seconds max
                 
-            } catch (error) {
-                hideLoading();
-                console.error('Authentication error:', error);
-                showError('Error accessing YouTube authentication. Please try again.');
-            }
+                // Check every 500ms if window is still open
+                const checkInterval = setInterval(async () => {
+                    checkCount++;
+                    
+                    try {
+                        // Try to get cookies after each check
+                        const cookies = await tryGetCookiesDirectly();
+                        if (cookies && cookies.length > 50) {
+                            console.log('Successfully retrieved cookies after YouTube sync');
+                            clearInterval(checkInterval);
+                            youtubeWindow.close();
+                            hideLoading();
+                            sendCookiesToBackend(cookies);
+                            resolve();
+                            return;
+                        }
+                    } catch (e) {
+                        console.log('Error checking cookies:', e);
+                    }
+                    
+                    // If window closed, try once more to get cookies
+                    if (youtubeWindow.closed) {
+                        clearInterval(checkInterval);
+                        console.log('YouTube window closed, final cookie attempt...');
+                        
+                        // Wait a moment and try one more time
+                        setTimeout(async () => {
+                            const finalCookies = await tryGetCookiesDirectly();
+                            hideLoading();
+                            
+                            if (finalCookies && finalCookies.length > 50) {
+                                sendCookiesToBackend(finalCookies);
+                            } else {
+                                showError('Could not retrieve YouTube cookies. Please ensure:\n1. You\'re logged into YouTube\n2. Popups are allowed\n3. Try clearing browser cache and logging in again');
+                            }
+                            resolve();
+                        }, 500);
+                        return;
+                    }
+                    
+                    // Timeout after 15 seconds
+                    if (checkCount >= maxChecks) {
+                        clearInterval(checkInterval);
+                        youtubeWindow.close();
+                        hideLoading();
+                        showError('Timeout. Please make sure you\'re logged into YouTube and try again.');
+                        resolve();
+                    }
+                }, 500);
+                
+                // Also show message to user
+                setTimeout(() => {
+                    if (!youtubeWindow.closed) {
+                        showSuccess('📺 YouTube window opened. Please wait while we sync your session...');
+                    }
+                }, 1000);
+            });
         }
         
         async function collectYouTubeCookies() {

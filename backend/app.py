@@ -1097,13 +1097,13 @@ class InvidiousDownloader:
             video_info = None
             working_instance = None
             
-            # Try to get video info
+            # Try to get video info with shorter timeout
             for instance in invidious_instances:
                 try:
                     info_url = f"{instance}/api/v1/videos/{video_id}"
                     logger.info(f"Trying Invidious instance: {instance}")
                     
-                    response = requests.get(info_url, timeout=10)
+                    response = requests.get(info_url, timeout=5)  # Reduced from 10 to 5 seconds
                     response.raise_for_status()
                     video_info = response.json()
                     working_instance = instance
@@ -1115,8 +1115,9 @@ class InvidiousDownloader:
                     continue
             
             if not video_info or not working_instance:
-                logger.error("All Invidious instances failed")
-                return {'success': False, 'error': 'Unable to access YouTube video'}
+                logger.error("All Invidious instances failed, falling back to yt-dlp")
+                # Fallback to yt-dlp when all Invidious instances fail
+                return self._download_generic(url, quality, media_type, 'youtube')
             
             title = video_info.get('title', f'Video_{video_id}')
             title = re.sub(r'[<>:"/\\|?*]', '_', title)

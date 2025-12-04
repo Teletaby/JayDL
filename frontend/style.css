@@ -685,3 +685,108 @@ header p {
         height: 500px;
     }
 }
+
+
+/* ==================== */
+/* YouTube Authentication Button Styles */
+/* ==================== */
+
+/* Main YouTube button style */
+.navbar-yt-btn {
+    background: linear-gradient(135deg, #FF0000 0%, #CC0000 100%);
+    color: white;
+    border: none;
+    padding: 8px 12px;
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 1.2rem;
+    transition: all 0.3s ease;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+    margin-right: 5px;
+}
+
+.navbar-yt-btn:hover {
+    background: linear-gradient(135deg, #CC0000 0%, #990000 100%);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+}
+
+/* When authenticated */
+.navbar-yt-btn.authenticated {
+    background: linear-gradient(135deg, #28a745 0%, #218838 100%);
+    color: white;
+    animation: pulse-green 2s infinite;
+}
+
+.navbar-yt-btn.authenticated:hover {
+    background: linear-gradient(135deg, #218838 0%, #1e7e34 100%);
+}
+
+/* Authentication success pulse animation */
+@keyframes pulse-green {
+    0% {
+        box-shadow: 0 0 0 0 rgba(40, 167, 69, 0.7);
+    }
+    70% {
+        box-shadow: 0 0 0 10px rgba(40, 167, 69, 0);
+    }
+    100% {
+        box-shadow: 0 0 0 0 rgba(40, 167, 69, 0);
+    }
+}
+
+/* Loading spinner for auth process */
+.loading-spinner {
+    border: 4px solid rgba(255, 255, 255, 0.3);
+    border-radius: 50%;
+    border-top: 4px solid #3498db;
+    width: 40px;
+    height: 40px;
+    animation: spin 1s linear infinite;
+    margin: 0 auto 20px;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* Better modal styling for auth messages */
+.modal-content {
+    background: white;
+    padding: 30px;
+    border-radius: 10px;
+    max-width: 400px;
+    width: 90%;
+    text-align: center;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+}
+
+/* Success/Error message improvements */
+.alert-success {
+    background: #d4edda;
+    color: #155724;
+    border: 1px solid #c3e6cb;
+    padding: 12px;
+    border-radius: 5px;
+    margin: 10px 0;
+    border-left: 4px solid #28a745;
+}
+
+.alert-error {
+    background: #f8d7da;
+    color: #721c24;
+    border: 1px solid #f5c6cb;
+    padding: 12px;
+    border-radius: 5px;
+    margin: 10px 0;
+    border-left: 4px solid #dc3545;
+}
+
+/* Mobile responsiveness for auth button */
+@media (max-width: 768px) {
+    .navbar-yt-btn {
+        padding: 6px 10px;
+        font-size: 1rem;
+    }
+}

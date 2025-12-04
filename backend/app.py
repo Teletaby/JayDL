@@ -683,7 +683,7 @@ class InvidiousDownloader:
             return None
     
     def download_media(self, url, quality='720', media_type='video'):
-        """Download media using yt-dlp - works for all platforms including Spotify"""
+        """Download media using Invidious for YouTube, yt-dlp for others"""
         try:
             import subprocess
             import json
@@ -701,6 +701,10 @@ class InvidiousDownloader:
             # Handle Spotify downloads with RapidAPI
             if platform == 'spotify':
                 return self._download_spotify(url, quality, media_type)
+            
+            # Handle YouTube downloads with Invidious instead of yt-dlp
+            if platform == 'youtube':
+                return self._download_youtube_invidious(url, quality, media_type)
             
             
             # Build yt-dlp command based on format
@@ -1054,6 +1058,141 @@ class InvidiousDownloader:
             return {'success': False, 'error': 'yt-dlp not installed. Run: pip install yt-dlp'}
         except Exception as e:
             logger.error(f"Download error: {str(e)}", exc_info=True)
+            return {'success': False, 'error': f'Download failed: {str(e)}'}
+    
+    
+    def _download_youtube_invidious(self, url, quality='720', media_type='video'):
+        """Download YouTube video using Invidious API instead of yt-dlp"""
+        try:
+            import requests
+            import re
+            import subprocess
+            
+            # Extract video ID from URL
+            video_id_match = re.search(r'(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})', url)
+            if not video_id_match:
+                return {'success': False, 'error': 'Invalid YouTube URL'}
+            
+            video_id = video_id_match.group(1)
+            invidious_instance = os.getenv('INVIDIOUS_INSTANCE', 'https://invidious.io')
+            
+            logger.info(f"Downloading YouTube video {video_id} via Invidious")
+            
+            try:
+                # Get video info from Invidious API
+                info_url = f"{invidious_instance}/api/v1/videos/{video_id}"
+                logger.info(f"Fetching video info from: {info_url}")
+                
+                response = requests.get(info_url, timeout=10)
+                response.raise_for_status()
+                video_info = response.json()
+                
+                title = video_info.get('title', f'Video_{video_id}')
+                # Sanitize filename
+                title = re.sub(r'[<>:"/\\|?*]', '_', title)
+                
+                logger.info(f"Video title: {title}")
+                
+                # Get download formats
+                formats = video_info.get('formatStreams', [])
+                if not formats:
+                    return {'success': False, 'error': 'No download formats available from Invidious'}
+                
+                if media_type == 'audio':
+                    # Look for audio format or best video to extract audio from
+                    format_to_use = formats[0]  # Use first available format
+                    
+                    logger.info(f"Downloading audio using Invidious format")
+                    
+                    # Download the video using yt-dlp with the video ID (Invidious acts as proxy)
+                    # This will still use yt-dlp but through Invidious's infrastructure
+                    invidious_url = f"{invidious_instance}/watch?v={video_id}"
+                    
+                    output_template = os.path.join(self.base_dir, f'{title}__audio.%(ext)s')
+                    
+                    cmd = [
+                        'yt-dlp',
+                        '--no-warnings',
+                        '-f', 'bestaudio',
+                        '-x',  # Extract audio
+                        '--audio-format', 'mp3',
+                        '--audio-quality', '192',
+                        '-o', output_template,
+                        invidious_url
+                    ]
+                    
+                    logger.info(f"Audio extraction command: {' '.join(cmd)}")
+                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+                    
+                    if result.returncode == 0:
+                        logger.info("Audio extraction completed successfully")
+                        return {
+                            'success': True,
+                            'title': title,
+                            'media_type': 'audio',
+                            'platform': 'youtube',
+                            'size': 'Unknown',
+                            'message': 'Audio extracted successfully from Invidious'
+                        }
+                    else:
+                        logger.error(f"Audio extraction failed: {result.stderr}")
+                        return {'success': False, 'error': f'Audio extraction failed: {result.stderr[:200]}'}
+                else:
+                    # Download video - find best quality match
+                    target_quality = int(quality.rstrip('p')) if quality != 'best' else 1080
+                    
+                    # Find format closest to target quality
+                    best_format = None
+                    for fmt in formats:
+                        if fmt.get('resolution'):
+                            res_height = int(fmt['resolution'].split('p')[0])
+                            if best_format is None or res_height <= target_quality:
+                                best_format = fmt
+                    
+                    if not best_format:
+                        best_format = formats[0]
+                    
+                    format_url = best_format.get('url')
+                    if not format_url:
+                        return {'success': False, 'error': 'Could not get download URL from Invidious'}
+                    
+                    logger.info(f"Downloading video from Invidious: {format_url[:100]}...")
+                    
+                    # Direct download from Invidious
+                    try:
+                        video_response = requests.get(format_url, timeout=300, stream=True)
+                        video_response.raise_for_status()
+                        
+                        # Save the file
+                        file_path = os.path.join(self.base_dir, f'{title}__720p.mp4')
+                        
+                        with open(file_path, 'wb') as f:
+                            for chunk in video_response.iter_content(chunk_size=8192):
+                                if chunk:
+                                    f.write(chunk)
+                        
+                        logger.info(f"Video saved to: {file_path}")
+                        
+                        return {
+                            'success': True,
+                            'title': title,
+                            'media_type': 'video',
+                            'platform': 'youtube',
+                            'quality': quality,
+                            'size': os.path.getsize(file_path),
+                            'message': f'Downloaded via Invidious ({quality} quality)'
+                        }
+                    
+                    except Exception as e:
+                        logger.error(f"Direct download from Invidious failed: {str(e)}")
+                        return {'success': False, 'error': f'Invidious download failed: {str(e)[:200]}'}
+            
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Invidious API error: {str(e)}")
+                return {'success': False, 'error': f'Invidious API error: {str(e)[:200]}'}
+        
+        except Exception as e:
+            logger.error(f"YouTube Invidious download error: {str(e)}", exc_info=True)
             return {'success': False, 'error': f'Download failed: {str(e)}'}
     
     

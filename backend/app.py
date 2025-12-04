@@ -416,9 +416,9 @@ class InvidiousDownloader:
             import subprocess
             import json
             
-            # Try to get video info from yt-dlp
+            # Try to get video info from yt-dlp with longer timeout
             cmd = ['yt-dlp', '--dump-json', '--no-warnings', f'https://www.youtube.com/watch?v={video_id}']
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)  # Increased from 10 to 30 seconds
             
             title = f'Video {video_id[:8]}...'
             duration = 'Unknown'

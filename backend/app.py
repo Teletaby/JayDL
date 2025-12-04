@@ -1385,8 +1385,6 @@ def authorize():
             scopes=SCOPES
         )
         
-        # Use the frontend URL as redirect for better UX - UPDATED
-        frontend_url = request.args.get('redirect_uri', 'https://jaydl.onrender.com')
         flow.redirect_uri = GOOGLE_REDIRECT_URI
         
         authorization_url, state = flow.authorization_url(
@@ -1395,23 +1393,24 @@ def authorize():
             prompt='consent'
         )
         
-        # Store the state in the session as string to avoid bytes serialization issues
-        session['state'] = str(state)
-        session['frontend_url'] = str(frontend_url)
-        session.modified = True  # Explicitly mark session as modified
-        
         logger.info(f"Generated authorization URL for OAuth, state: {state}")
         
-        # Return the URL for frontend to redirect to
-        return jsonify({
+        # Return the URL and state for frontend to use
+        # Frontend will pass state back to callback
+        response = jsonify({
             'success': True,
             'auth_url': authorization_url,
             'state': state,
             'message': 'Redirect user to this URL for authentication'
         })
+        
+        # Set state in response cookie so it's available at callback
+        response.set_cookie('oauth_state', state, max_age=600, httponly=True, samesite='Lax', secure=True)
+        
+        return response
     
     except Exception as e:
-        logger.error(f"Error generating auth URL: {str(e)}")
+        logger.error(f"Error generating auth URL: {str(e)}", exc_info=True)
         return jsonify({
             'success': False,
             'error': f'Failed to start authentication: {str(e)}'
@@ -1421,17 +1420,17 @@ def authorize():
 def oauth2callback():
     """OAuth2 callback endpoint"""
     try:
-        # Get the state from the request query parameters
+        # Get the state from the request query parameters and cookie
         request_state = request.args.get('state')
-        session_state = session.get('state')
+        cookie_state = request.cookies.get('oauth_state')
         
-        if not request_state or not session_state:
-            logger.error(f"State mismatch: request_state={request_state}, session_state={session_state}")
+        if not request_state or not cookie_state:
+            logger.error(f"State mismatch: request_state={request_state}, cookie_state={cookie_state}")
             return redirect(f"https://jaydl.onrender.com/#oauth_error=invalid_state")
         
-        # Convert both to string for comparison
-        if str(request_state) != str(session_state):
-            logger.error(f"State mismatch: {request_state} != {session_state}")
+        # Verify state matches
+        if str(request_state) != str(cookie_state):
+            logger.error(f"State mismatch: {request_state} != {cookie_state}")
             return redirect(f"https://jaydl.onrender.com/#oauth_error=state_mismatch")
         
         # Recreate the flow
@@ -1445,7 +1444,7 @@ def oauth2callback():
                 }
             },
             scopes=SCOPES,
-            state=str(session_state)
+            state=str(cookie_state)
         )
         
         flow.redirect_uri = GOOGLE_REDIRECT_URI
@@ -1467,18 +1466,16 @@ def oauth2callback():
             'scopes': list(credentials.scopes) if credentials.scopes else []
         }
         
-        # Clear the state
-        session.pop('state', None)
-        session.modified = True
-        
         logger.info(f"User authenticated successfully via OAuth")
         
-        # Redirect back to frontend with success - UPDATED
-        return redirect("https://jaydl.onrender.com/#auth_success")
+        # Redirect back to frontend with success
+        response = redirect("https://jaydl.onrender.com/#auth_success")
+        # Clear the oauth state cookie
+        response.delete_cookie('oauth_state')
+        return response
     
     except Exception as e:
         logger.error(f"OAuth callback error: {str(e)}", exc_info=True)
-        # UPDATED
         return redirect(f"https://jaydl.onrender.com/#oauth_error={str(e)}")
 
 @app.route('/api/oauth2status')

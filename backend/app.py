@@ -702,8 +702,17 @@ class InvidiousDownloader:
             if platform == 'spotify':
                 return self._download_spotify(url, quality, media_type)
             
-            # Handle YouTube downloads with Invidious instead of yt-dlp
+            # Handle YouTube downloads - check for cookies first
             if platform == 'youtube':
+                # If user has authenticated with cookies, try yt-dlp first
+                if hasattr(app, 'youtube_cookies') and app.youtube_cookies:
+                    logger.info("User has YouTube cookies, trying yt-dlp with authentication")
+                    result = self._download_youtube_ytdlp(url, quality, media_type)
+                    if result.get('success'):
+                        return result
+                    logger.warning("yt-dlp with cookies failed, falling back to Invidious")
+                
+                # Otherwise use Invidious as fallback
                 return self._download_youtube_invidious(url, quality, media_type)
             
             

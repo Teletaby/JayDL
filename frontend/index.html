@@ -672,76 +672,66 @@ Allow YouTube authentication?`);
             collectYouTubeCookies();
         }
         
-        async function collectYouTubeCookies() {
+        function enableYouTubeAuth() {
+            // Show permission dialog
+            const permission = confirm(`🔐 YouTube Authentication
+
+JayDL will use your YouTube session to download videos.
+
+This requires you to:
+✓ Be logged into YouTube in your browser
+✓ Click "Yes" to proceed
+
+Allow YouTube authentication?`);
+            
+            if (!permission) {
+                return;
+            }
+            
+            // Automatically authenticate
+            authenticateYouTube();
+        }
+        
+        async function authenticateYouTube() {
+            showLoading('Activating YouTube authentication...');
+            
+            // Try to detect if user is logged into YouTube
+            // by checking if we can access YouTube in a hidden way
             try {
-                showLoading('Connecting to YouTube for authentication...');
+                if (navigator.cookieStore) {
+                    // Use Cookie Store API to get YouTube cookies
+                    const allCookies = await navigator.cookieStore.getAll();
+                    const youtubeCookies = allCookies.filter(c => 
+                        c.domain && (c.domain.includes('youtube') || c.domain.includes('google'))
+                    );
+                    
+                    if (youtubeCookies.length > 0) {
+                        const cookieString = youtubeCookies.map(c => `${c.name}=${c.value}`).join('; ');
+                        hideLoading();
+                        sendCookiesToBackend(cookieString);
+                        return;
+                    }
+                }
                 
-                // Open YouTube in a popup window
-                const youtubeWindow = window.open('https://www.youtube.com', 'youtube_auth', 'width=800,height=600');
-                
-                if (!youtubeWindow) {
+                // If Cookie Store API fails, try document.cookie
+                if (document.cookie && document.cookie.length > 20) {
                     hideLoading();
-                    showError('Popup blocked! Please allow popups and try again.');
+                    sendCookiesToBackend(document.cookie);
                     return;
                 }
                 
-                // Monitor when user closes YouTube window
-                const checkWindowInterval = setInterval(async () => {
-                    if (youtubeWindow.closed) {
-                        clearInterval(checkWindowInterval);
-                        hideLoading();
-                        showLoading('Processing your YouTube authentication...');
-                        
-                        // Wait a moment for cookies to be set
-                        await new Promise(resolve => setTimeout(resolve, 1000));
-                        
-                        // Try to extract cookies using Cookie Store API
-                        if (navigator.cookieStore) {
-                            try {
-                                const allCookies = await navigator.cookieStore.getAll();
-                                const youtubeCookies = allCookies.filter(c => 
-                                    c.domain && (c.domain.includes('youtube') || c.domain.includes('google'))
-                                );
-                                
-                                if (youtubeCookies.length > 0) {
-                                    const cookieString = youtubeCookies.map(c => `${c.name}=${c.value}`).join('; ');
-                                    hideLoading();
-                                    sendCookiesToBackend(cookieString);
-                                    return;
-                                }
-                            } catch (e) {
-                                console.log('Cookie Store API error:', e);
-                            }
-                        }
-                        
-                        // Fallback: Try to use cookies from current context
-                        const contextCookies = document.cookie;
-                        if (contextCookies && contextCookies.length > 20) {
-                            hideLoading();
-                            sendCookiesToBackend(contextCookies);
-                            return;
-                        }
-                        
-                        // If all else fails, show success message
-                        // (cookies might work server-side even if we can't read them client-side)
-                        hideLoading();
-                        showSuccess('✓ YouTube authentication processed!');
-                        localStorage.setItem('yt_authenticated', 'true');
-                        document.getElementById('ytAuthBtn').classList.add('authenticated');
-                    }
-                }, 500);
-                
-                // Close the loading modal and show instructions
-                setTimeout(() => {
-                    hideLoading();
-                    showSuccess('📺 YouTube window opened! Please log in if you haven\'t already, then close the window.');
-                }, 500);
+                hideLoading();
+                showError('YouTube cookies not found. Please make sure you\'re logged into YouTube in your browser and try again.');
                 
             } catch (error) {
                 hideLoading();
-                console.error('Error in cookie collection:', error);
-                showError('Authentication failed. Please try again.');
+                console.error('Authentication error:', error);
+                showError('Error accessing YouTube authentication. Please try again.');
             }
+        }
+        
+        async function collectYouTubeCookies() {
+            await authenticateYouTube();
         }
         
         function sendCookiesToBackend(cookieValue) {

@@ -87,26 +87,7 @@ body {
     background-color: rgba(255, 255, 255, 0.1);
 }
 
-.navbar-yt-btn {
-    background: none;
-    border: none;
-    color: #FF0000;
-    font-size: 1.3em;
-    cursor: pointer;
-    padding: 8px 15px;
-    border-radius: 8px;
-    transition: all 0.3s;
-    margin-right: 5px;
-}
 
-.navbar-yt-btn:hover {
-    background-color: rgba(255, 0, 0, 0.1);
-    transform: scale(1.1);
-}
-
-.navbar-yt-btn.authenticated {
-    color: #00FF00;
-}
 
 .navbar-dropdown {
     position: absolute;
@@ -687,47 +668,7 @@ header p {
 }
 
 
-/* ==================== */
-/* YouTube Authentication Button Styles */
-/* ==================== */
 
-/* Main YouTube button style */
-.navbar-yt-btn {
-    background: linear-gradient(135deg, #FF0000 0%, #CC0000 100%);
-    color: white;
-    border: none;
-    padding: 8px 12px;
-    border-radius: 50%;
-    cursor: pointer;
-    font-size: 1.2rem;
-    transition: all 0.3s ease;
-    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
-    margin-right: 5px;
-}
-
-.navbar-yt-btn:hover {
-    background: linear-gradient(135deg, #CC0000 0%, #990000 100%);
-    transform: translateY(-2px);
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
-}
-
-/* When authenticated */
-.navbar-yt-btn.authenticated {
-    background: linear-gradient(135deg, #28a745 0%, #218838 100%);
-    color: white;
-    animation: pulse-green 2s infinite;
-}
-
-.navbar-yt-btn.authenticated:hover {
-    background: linear-gradient(135deg, #218838 0%, #1e7e34 100%);
-}
-
-/* Authentication success pulse animation */
-@keyframes pulse-green {
-    0% {
-        box-shadow: 0 0 0 0 rgba(40, 167, 69, 0.7);
-    }
-    70% {
         box-shadow: 0 0 0 10px rgba(40, 167, 69, 0);
     }
     100% {
@@ -783,10 +724,3 @@ header p {
     border-left: 4px solid #dc3545;
 }
 
-/* Mobile responsiveness for auth button */
-@media (max-width: 768px) {
-    .navbar-yt-btn {
-        padding: 6px 10px;
-        font-size: 1rem;
-    }
-}

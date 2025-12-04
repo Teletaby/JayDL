@@ -1394,13 +1394,13 @@ def authorize():
         authorization_url, state = flow.authorization_url(
             access_type='offline',
             include_granted_scopes='true',
-            prompt='consent',
-            state=frontend_url  # Store frontend URL in state
+            prompt='consent'
         )
         
-        # Store the state in the session
-        session['state'] = state
-        session['frontend_url'] = frontend_url
+        # Store the state in the session as string to avoid bytes serialization issues
+        session['state'] = str(state)
+        session['frontend_url'] = str(frontend_url)
+        session.modified = True  # Explicitly mark session as modified
         
         logger.info(f"Generated authorization URL for OAuth, state: {state}")
         
@@ -1423,14 +1423,18 @@ def authorize():
 def oauth2callback():
     """OAuth2 callback endpoint"""
     try:
-        # Get the state from the session
-        state = session.get('state')
-        if not state:
-            # Try to get state from query params as fallback
-            state = request.args.get('state')
-            if not state:
-                logger.error("No state parameter found in session or request")
-                return redirect(f"https://jaydl.onrender.com/#oauth_error=invalid_state")
+        # Get the state from the request query parameters
+        request_state = request.args.get('state')
+        session_state = session.get('state')
+        
+        if not request_state or not session_state:
+            logger.error(f"State mismatch: request_state={request_state}, session_state={session_state}")
+            return redirect(f"https://jaydl.onrender.com/#oauth_error=invalid_state")
+        
+        # Convert both to string for comparison
+        if str(request_state) != str(session_state):
+            logger.error(f"State mismatch: {request_state} != {session_state}")
+            return redirect(f"https://jaydl.onrender.com/#oauth_error=state_mismatch")
         
         # Recreate the flow
         flow = google_auth_oauthlib.flow.Flow.from_client_config(
@@ -1443,7 +1447,7 @@ def oauth2callback():
                 }
             },
             scopes=SCOPES,
-            state=state
+            state=str(session_state)
         )
         
         flow.redirect_uri = GOOGLE_REDIRECT_URI
@@ -1455,18 +1459,19 @@ def oauth2callback():
         # Get credentials
         credentials = flow.credentials
         
-        # Store credentials in session
+        # Store credentials in session as strings to avoid serialization issues
         session['credentials'] = {
-            'token': credentials.token,
-            'refresh_token': credentials.refresh_token,
-            'token_uri': credentials.token_uri,
-            'client_id': credentials.client_id,
-            'client_secret': credentials.client_secret,
-            'scopes': credentials.scopes
+            'token': str(credentials.token) if credentials.token else None,
+            'refresh_token': str(credentials.refresh_token) if credentials.refresh_token else None,
+            'token_uri': str(credentials.token_uri) if credentials.token_uri else None,
+            'client_id': str(credentials.client_id) if credentials.client_id else None,
+            'client_secret': str(credentials.client_secret) if credentials.client_secret else None,
+            'scopes': list(credentials.scopes) if credentials.scopes else []
         }
         
         # Clear the state
         session.pop('state', None)
+        session.modified = True
         
         logger.info(f"User authenticated successfully via OAuth")
         
@@ -1474,7 +1479,7 @@ def oauth2callback():
         return redirect("https://jaydl.onrender.com/#auth_success")
     
     except Exception as e:
-        logger.error(f"OAuth callback error: {str(e)}")
+        logger.error(f"OAuth callback error: {str(e)}", exc_info=True)
         # UPDATED
         return redirect(f"https://jaydl.onrender.com/#oauth_error={str(e)}")
 

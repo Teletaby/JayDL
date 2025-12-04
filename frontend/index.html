@@ -165,9 +165,6 @@
                     <i class="fab fa-google"></i>
                     <span id="authBtnText">Sign In</span>
                 </button>
-                <button class="navbar-yt-btn" id="ytAuthBtn" title="YouTube Authentication">
-                    <i class="fab fa-youtube"></i>
-                </button>
                 <button class="navbar-chat-btn" id="chatBtn" title="Open Chatbot">
                     <i class="fas fa-comments"></i>
                 </button>
@@ -1002,9 +999,6 @@
 
         // Chat button
         document.getElementById('chatBtn').addEventListener('click', openChatbot);
-
-        // YouTube auth button (now opens auth modal)
-        document.getElementById('ytAuthBtn').addEventListener('click', openAuthModal);
 
         // Close menu when clicking outside
         document.addEventListener('click', (e) => {

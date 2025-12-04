@@ -72,6 +72,40 @@ body {
     text-align: center;
 }
 
+.navbar-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    white-space: nowrap;
+}
+
+.navbar-auth-btn {
+    background: #4285f4;
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 20px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    transition: all 0.3s ease;
+}
+
+.navbar-auth-btn:hover {
+    background: #357ae8;
+    transform: translateY(-2px);
+}
+
+.navbar-auth-btn.authenticated {
+    background: #10b981;
+}
+
+.navbar-auth-btn.authenticated:hover {
+    background: #0da271;
+}
+
 .navbar-chat-btn {
     background: none;
     border: none;
@@ -86,8 +120,6 @@ body {
 .navbar-chat-btn:hover {
     background-color: rgba(255, 255, 255, 0.1);
 }
-
-
 
 .navbar-dropdown {
     position: absolute;

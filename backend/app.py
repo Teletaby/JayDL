@@ -32,20 +32,19 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 app.config.from_pyfile('config.py', silent=True)
 
-# Session configuration for OAuth - UPDATED FOR CROSS-DOMAIN
+# Session configuration for OAuth
 app.secret_key = os.getenv('FLASK_SECRET_KEY', secrets.token_hex(32))
 app.config['SESSION_TYPE'] = 'filesystem'
 app.config['SESSION_PERMANENT'] = False
 app.config['SESSION_USE_SIGNER'] = True
 app.config['SESSION_COOKIE_SECURE'] = True  # Always True for HTTPS
 app.config['SESSION_COOKIE_HTTPONLY'] = True
-app.config['SESSION_COOKIE_SAMESITE'] = 'None'  # Changed from 'Lax' to 'None'
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'  # Use Lax for same-site requests
 app.config['SESSION_COOKIE_NAME'] = 'jaydl_session'
-app.config['SESSION_COOKIE_DOMAIN'] = '.onrender.com'  # Add this for shared domain
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=1)
-app.config['SESSION_COOKIE_PATH'] = '/'  # Make sure it's accessible everywhere
+app.config['SESSION_COOKIE_PATH'] = '/'
 
-# Add CORS configuration - UPDATED with correct frontend domain
+# Add CORS configuration
 CORS(app,
      supports_credentials=True,
      origins=[
@@ -55,7 +54,6 @@ CORS(app,
          "https://jaydl-backend.onrender.com"
      ],
      allow_headers=["Content-Type", "Authorization", "Accept", "Origin"],
-     expose_headers=["Set-Cookie"],
      methods=["GET", "POST", "OPTIONS", "PUT", "DELETE"])
 
 Session(app)

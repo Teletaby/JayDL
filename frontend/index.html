@@ -884,40 +884,8 @@
         const data = await response.json();
         
         if (data.success && data.auth_url) {
-            // Open auth window
-            const authWindow = window.open(
-                data.auth_url,
-                'jaydl_auth',
-                'width=600,height=700,left=100,top=100'
-            );
-            
-            if (!authWindow) {
-                showAuthError('Popup blocked! Please allow popups for this site.');
-                return;
-            }
-            
-            // Poll for window close
-            const checkWindowClosed = setInterval(() => {
-                if (authWindow.closed) {
-                    clearInterval(checkWindowClosed);
-                    
-                    // Check auth status
-                    setTimeout(() => {
-                        checkAuthStatus().then(authenticated => {
-                            if (authenticated) {
-                                showAuthSuccess();
-                                setTimeout(() => {
-                                    closeAuthModal();
-                                    showSuccess('Successfully signed in with Google!');
-                                }, 1500);
-                            } else {
-                                showAuthError('Authentication failed or was cancelled.');
-                            }
-                        });
-                    }, 1000);
-                }
-            }, 500);
-            
+            // Redirect to Google OAuth (same tab/window - no popup)
+            window.location.href = data.auth_url;
         } else {
             showAuthError(data.error || 'Failed to start authentication');
         }

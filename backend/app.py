@@ -1408,7 +1408,8 @@ def authorize():
         })
         
         # Set state in response cookie so it's available at callback
-        response.set_cookie('oauth_state', state, max_age=600, httponly=True, samesite='Lax', secure=True)
+        # Use SameSite=None to allow cross-site cookie (Google redirects back)
+        response.set_cookie('oauth_state', state, max_age=600, httponly=True, samesite='None', secure=True, path='/')
         
         return response
     
@@ -1429,12 +1430,12 @@ def oauth2callback():
         
         if not request_state or not cookie_state:
             logger.error(f"State mismatch: request_state={request_state}, cookie_state={cookie_state}")
-            return redirect(f"https://jaydl.onrender.com/#oauth_error=invalid_state")
+            return redirect(f"http://localhost:8000/#oauth_error=invalid_state")
         
         # Verify state matches
         if str(request_state) != str(cookie_state):
             logger.error(f"State mismatch: {request_state} != {cookie_state}")
-            return redirect(f"https://jaydl.onrender.com/#oauth_error=state_mismatch")
+            return redirect(f"http://localhost:8000/#oauth_error=state_mismatch")
         
         # Recreate the flow
         flow = google_auth_oauthlib.flow.Flow.from_client_config(
@@ -1471,8 +1472,14 @@ def oauth2callback():
         
         logger.info(f"User authenticated successfully via OAuth")
         
+        # Determine frontend URL for redirect
+        if os.getenv('FLASK_ENV') == 'production' or 'onrender' in os.getenv('RENDER_EXTERNAL_URL', ''):
+            frontend_url = "https://jaydl.onrender.com"
+        else:
+            frontend_url = "http://localhost:8000"
+        
         # Redirect back to frontend with success
-        response = redirect("https://jaydl.onrender.com/#auth_success")
+        response = redirect(f"{frontend_url}/#auth_success")
         # Clear the oauth state cookie
         response.delete_cookie('oauth_state')
         return response

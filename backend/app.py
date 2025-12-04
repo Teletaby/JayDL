@@ -1219,16 +1219,38 @@ class InvidiousDownloader:
     
     
     def _download_youtube_ytdlp(self, url, quality='720', media_type='video'):
-        """Fallback: Download YouTube video using yt-dlp directly"""
+        """Fallback: Download YouTube video using yt-dlp with stored cookies if available"""
         try:
             import subprocess
             import json
+            import tempfile
             
-            logger.info(f"Using yt-dlp fallback for YouTube download")
+            logger.info(f"Using yt-dlp for YouTube download (quality={quality}, type={media_type})")
             
             video_id_match = __import__('re').search(r'(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})', url)
             if video_id_match:
                 url = f'https://www.youtube.com/watch?v={video_id_match.group(1)}'
+            
+            # Check if cookies are available
+            cookies_arg = []
+            has_cookies = False
+            
+            # Try to get cookies from app context
+            try:
+                from flask import current_app
+                if hasattr(current_app, 'youtube_cookies') and current_app.youtube_cookies:
+                    has_cookies = True
+                    cookies_str = current_app.youtube_cookies
+                    
+                    # Write cookies to temporary file
+                    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+                        f.write(cookies_str)
+                        cookies_file = f.name
+                    
+                    cookies_arg = ['--cookies', cookies_file]
+                    logger.info("Using stored YouTube cookies for authentication")
+            except:
+                pass
             
             if media_type == 'audio':
                 output_template = os.path.join(self.base_dir, f'%(title)s__audio.%(ext)s')
@@ -1241,8 +1263,7 @@ class InvidiousDownloader:
                     '--audio-format', 'mp3',
                     '--audio-quality', '192',
                     '-o', output_template,
-                    url
-                ]
+                ] + cookies_arg + [url]
             else:
                 quality_map = {
                     '1440': 'bestvideo[height<=1440]+bestaudio/best[height<=1440]/best',
@@ -1260,11 +1281,17 @@ class InvidiousDownloader:
                     '--no-warnings',
                     '-f', format_spec,
                     '-o', output_template,
-                    url
-                ]
+                ] + cookies_arg + [url]
             
-            logger.info(f"Running yt-dlp: {' '.join(cmd)}")
+            logger.info(f"Running yt-dlp: {' '.join([c for c in cmd if not c.startswith('/tmp')])}")
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            
+            # Clean up temp cookies file
+            if cookies_arg:
+                try:
+                    os.remove(cookies_file)
+                except:
+                    pass
             
             if result.returncode == 0:
                 logger.info("yt-dlp download completed successfully")
@@ -1275,12 +1302,20 @@ class InvidiousDownloader:
                     'platform': 'youtube',
                     'quality': quality,
                     'size': 'Unknown',
-                    'message': f'Downloaded via yt-dlp fallback ({quality} quality)'
+                    'message': f'Downloaded via YouTube ({quality} quality)'
                 }
             else:
                 error_msg = result.stderr[:200] if result.stderr else 'Unknown error'
                 logger.error(f"yt-dlp failed: {error_msg}")
-                return {'success': False, 'error': f'yt-dlp download failed: {error_msg}'}
+                
+                if not has_cookies and 'Sign in to confirm' in error_msg:
+                    return {
+                        'success': False,
+                        'error': 'YouTube authentication required. Please click "Enable YouTube Downloads" to authorize.',
+                        'need_auth': True
+                    }
+                
+                return {'success': False, 'error': f'Download failed: {error_msg}'}
         
         except Exception as e:
             logger.error(f"yt-dlp fallback error: {str(e)}", exc_info=True)
@@ -1438,9 +1473,38 @@ def index():
             'analyze': '/api/analyze (POST)',
             'download': '/api/download (POST)',
             'platforms': '/api/platforms (GET)',
-            'health': '/api/health (GET)'
+            'health': '/api/health (GET)',
+            'set_cookies': '/api/set-cookies (POST)'
         }
     })
+
+@app.route('/api/set-cookies', methods=['POST'])
+def set_youtube_cookies():
+    """Store YouTube cookies from user's browser for authenticated downloads"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'error': 'No data received'}), 400
+        
+        cookies = data.get('cookies')
+        if not cookies:
+            return jsonify({'success': False, 'error': 'Cookies are required'}), 400
+        
+        # Store cookies in a temporary file (in production, use a database)
+        # For now, we'll store them as an environment variable in memory
+        # WARNING: In production, use secure storage (encrypted database, redis, etc.)
+        app.youtube_cookies = cookies
+        
+        logger.info("YouTube cookies received and stored")
+        
+        return jsonify({
+            'success': True,
+            'message': 'YouTube cookies stored successfully. You can now download YouTube videos!'
+        })
+    
+    except Exception as e:
+        logger.error(f"Error storing cookies: {str(e)}")
+        return jsonify({'success': False, 'error': f'Failed to store cookies: {str(e)}'}), 500
 
 @app.route('/api/analyze', methods=['POST'])
 def analyze_media():

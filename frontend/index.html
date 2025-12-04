@@ -19,6 +19,9 @@
                 </div>
             </div>
             <p class="navbar-subtitle">Download videos and music from various platforms</p>
+            <button class="navbar-yt-btn" id="ytAuthBtn" title="Enable YouTube Downloads">
+                <i class="fab fa-youtube"></i>
+            </button>
             <button class="navbar-chat-btn" id="chatBtn" title="Open Chatbot">
                 <i class="fas fa-comments"></i>
             </button>
@@ -637,6 +640,70 @@
         });
 
         document.getElementById('chatBtn').addEventListener('click', openChatbot);
+        document.getElementById('ytAuthBtn').addEventListener('click', enableYouTubeAuth);
+
+        // Check if YouTube is already authenticated
+        function checkYouTubeAuth() {
+            const stored = localStorage.getItem('yt_authenticated');
+            if (stored === 'true') {
+                document.getElementById('ytAuthBtn').classList.add('authenticated');
+            }
+        }
+        
+        function enableYouTubeAuth() {
+            // Use Google OAuth to get credentials
+            const clientId = ''; // This would be your Google OAuth client ID
+            
+            // For now, show instructions for users to enable YouTube downloads
+            const message = `
+YouTube Authentication Required
+
+To enable YouTube downloads, follow these steps:
+
+1. Go to https://www.youtube.com and log in
+2. Open your browser's Developer Tools (F12)
+3. Go to the "Application" tab
+4. Find "Cookies" > "https://www.youtube.com"
+5. Find the cookie named "__Secure-1PSID" and copy its value
+6. Paste it here and click "Authorize"
+
+(In the future, this will be automatic)
+            `;
+            
+            const userCookie = prompt(message.trim(), '');
+            
+            if (!userCookie || userCookie.trim() === '') {
+                alert('YouTube authentication cancelled');
+                return;
+            }
+            
+            // Send cookies to backend
+            fetch(API_BASE + '/api/set-cookies', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    cookies: userCookie.trim()
+                })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.success) {
+                    localStorage.setItem('yt_authenticated', 'true');
+                    document.getElementById('ytAuthBtn').classList.add('authenticated');
+                    alert('✓ YouTube authentication successful! You can now download YouTube videos.');
+                } else {
+                    alert('✗ Authentication failed: ' + data.error);
+                }
+            })
+            .catch(err => {
+                alert('✗ Error: ' + err.message);
+            });
+        }
+        
+        // Check auth on page load
+        checkYouTubeAuth();
 
         // Close menu when clicking outside
         document.addEventListener('click', (e) => {

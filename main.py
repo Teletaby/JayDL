@@ -35,10 +35,15 @@ class JayDLLauncher:
         try:
             for line in iter(process.stdout.readline, ''):
                 if line:
-                    print(f"[{name}] {line.rstrip()}")
+                    try:
+                        print(f"[{name}] {line.rstrip()}")
+                    except UnicodeDecodeError:
+                        # Handle encoding issues gracefully
+                        print(f"[{name}] (output encoding issue - process is running)")
                     sys.stdout.flush()
         except Exception as e:
-            print(f"Error monitoring {name}: {e}")
+            # Don't print error for normal process termination
+            pass
         
     def check_dependencies(self):
         """Check if all required dependencies are available"""
@@ -104,16 +109,14 @@ class JayDLLauncher:
         """Start the backend server"""
         print("🔧 Starting backend server...")
         try:
-            # Change to backend directory
-            os.chdir(self.backend_dir)
-            
             # Start Flask app
             process = subprocess.Popen(
                 [sys.executable, 'app.py'],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
-                bufsize=1
+                bufsize=1,
+                cwd=str(self.backend_dir)
             )
             
             self.processes.append(('backend', process))
@@ -137,16 +140,14 @@ class JayDLLauncher:
         """Start the frontend server"""
         print("🎨 Starting frontend server...")
         try:
-            # Change to frontend directory
-            os.chdir(self.frontend_dir)
-            
             # Start frontend server
             process = subprocess.Popen(
                 [sys.executable, 'local-server.py'],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
-                bufsize=1
+                bufsize=1,
+                cwd=str(self.frontend_dir)
             )
             
             self.processes.append(('frontend', process))
@@ -179,27 +180,39 @@ class JayDLLauncher:
             node_modules = self.chatbot_dir / 'node_modules'
             if not node_modules.exists():
                 print("📦 Installing chatbot dependencies (first time)...")
-                os.chdir(self.chatbot_dir)
                 result = subprocess.run(
                     ['npm', 'install'],
+                    cwd=str(self.chatbot_dir),
                     capture_output=True,
                     text=True
                 )
                 if result.returncode != 0:
                     print("⚠️  Warning: Failed to install chatbot dependencies")
+                    print(f"   Error: {result.stderr}")
                     print("   Make sure Node.js is installed: https://nodejs.org/")
                     return True  # Don't fail, continue without chatbot
+                print("✅ Chatbot dependencies installed")
             
-            # Change to chatbot directory
-            os.chdir(self.chatbot_dir)
+            # Start chatbot server using node directly with better environment
+            # Load chatbot .env variables
+            chatbot_env = os.environ.copy()
+            chatbot_env_file = self.chatbot_dir / '.env'
+            if chatbot_env_file.exists():
+                with open(chatbot_env_file, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith('#') and '=' in line:
+                            key, value = line.split('=', 1)
+                            chatbot_env[key.strip()] = value.strip()
             
-            # Start chatbot server
             process = subprocess.Popen(
-                ['npm', 'start'],
+                ['node', 'server.js'],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
-                bufsize=1
+                bufsize=1,
+                cwd=str(self.chatbot_dir),
+                env=chatbot_env
             )
             
             self.processes.append(('chatbot', process))
@@ -214,13 +227,19 @@ class JayDLLauncher:
             self.monitor_threads.append(monitor_thread)
             
             print(f"✅ Chatbot started (PID: {process.pid})")
+            
+            # Give chatbot a moment to start
+            time.sleep(1)
             return True
-        except FileNotFoundError:
-            print("⚠️  Node.js not found. Chatbot requires Node.js to run.")
+        except FileNotFoundError as e:
+            print(f"⚠️  Node.js not found. Chatbot requires Node.js to run.")
             print("   Download from: https://nodejs.org/")
+            print(f"   Error: {e}")
             return True  # Don't fail completely
         except Exception as e:
             print(f"⚠️  Failed to start chatbot: {e}")
+            import traceback
+            traceback.print_exc()
             return True  # Don't fail completely
     
     def print_status(self):
@@ -281,9 +300,6 @@ class JayDLLauncher:
         # Create downloads directory
         self.create_downloads_dir()
         
-        # Change back to root directory
-        os.chdir(self.root_dir)
-        
         # Start servers
         if not self.start_backend():
             return False
@@ -318,9 +334,12 @@ class JayDLLauncher:
                 
                 self.processes = active_processes
                 
-                # If any process has exited, shutdown everything
-                if len(self.processes) < 2:
-                    print("❌ One or more services have stopped. Shutting down...")
+                # Count critical services (backend + frontend)
+                critical_services = sum(1 for name, _ in self.processes if name in ['backend', 'frontend'])
+                
+                # If critical services have exited, shutdown everything
+                if critical_services < 2:
+                    print("❌ Critical service(s) have stopped. Shutting down...")
                     self.stop_all()
                     return False
                 

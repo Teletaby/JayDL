@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>JayDL - Download Videos & Music</title>
+    <title>JayDL</title>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
 </head>
@@ -115,16 +115,13 @@
                     <i class="fas fa-times"></i>
                 </button>
             </div>
-            <div class="chatbot-messages" id="chatMessages">
-                <div class="chat-message bot-message">
-                    <p>Hi! I'm your JayDL Assistant. Ask me about social media trends, music recommendations, or how to download from different platforms! 🎵</p>
+            <div class="chatbot-maintenance">
+                <div class="maintenance-icon">
+                    <i class="fas fa-tools"></i>
                 </div>
-            </div>
-            <div class="chatbot-input-area">
-                <input type="text" id="chatInput" placeholder="Ask me about trends, music, or how to use JayDL..." autocomplete="off">
-                <button onclick="sendChatMessage()" class="btn btn-primary">
-                    <i class="fas fa-paper-plane"></i>
-                </button>
+                <h3>Under Maintenance</h3>
+                <p>The chatbot is currently undergoing maintenance and will be back online soon.</p>
+                <p>Thank you for your patience!</p>
             </div>
         </div>
     </div>
@@ -656,7 +653,6 @@
         function openChatbot() {
             document.getElementById('chatbotModal').classList.remove('hidden');
             document.getElementById('navbarDropdown').classList.add('hidden');
-            document.getElementById('chatInput').focus();
         }
 
         function closeChatbot() {

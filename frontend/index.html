@@ -332,7 +332,7 @@
             return `${protocol}//${hostname}${port ? ':' + port : ''}`;
         };
 
-        const API_BASE = getBackendUrl();
+        const API_BASE = 'https://jaydl-backend.onrender.com';
         let currentMediaInfo = null;
         let selectedQuality = 'best';
         let selectedMediaType = 'video';
@@ -836,65 +836,27 @@
         // =============== OAUTH AUTHENTICATION FUNCTIONS ===============
 
         async function checkAuthStatus() {
-            try {
-                const response = await fetch(`${API_BASE}/api/oauth2status`, {
-                    credentials: 'include' // Important for cookies/session
-                });
-                
-                if (!response.ok) {
-                    throw new Error('Failed to check auth status');
-                }
-                
-                const data = await response.json();
-                
-                if (data.authenticated) {
-                    isAuthenticated = true;
-                    currentUser = data.user_info || { user_name: 'Authenticated User' };
-                    
-                    // Update UI
-                    document.getElementById('authStatus').innerHTML = `
-                        <i class="fas fa-user-check"></i>
-                        <span>${currentUser.user_name}</span>
-                    `;
-                    document.getElementById('authStatus').className = 'auth-status authenticated';
-                    document.getElementById('authStatus').style.display = 'inline-flex';
-                    
-                    document.getElementById('authBtn').innerHTML = `
-                        <i class="fas fa-sign-out-alt"></i>
-                        <span>Sign Out</span>
-                    `;
-                    document.getElementById('authBtn').className = 'navbar-auth-btn authenticated';
-                    document.getElementById('authBtn').onclick = logoutUser;
-                    
-                    console.log('User is authenticated:', currentUser);
-                    return true;
-                } else {
-                    isAuthenticated = false;
-                    currentUser = null;
-                    
-                    // Update UI
-                    document.getElementById('authStatus').innerHTML = `
-                        <i class="fas fa-user"></i>
-                        <span>Not Signed In</span>
-                    `;
-                    document.getElementById('authStatus').className = 'auth-status not-authenticated';
-                    document.getElementById('authStatus').style.display = 'inline-flex';
-                    
-                    document.getElementById('authBtn').innerHTML = `
-                        <i class="fab fa-google"></i>
-                        <span>Sign In</span>
-                    `;
-                    document.getElementById('authBtn').className = 'navbar-auth-btn';
-                    document.getElementById('authBtn').onclick = openAuthModal;
-                    
-                    console.log('User is not authenticated');
-                    return false;
-                }
-            } catch (err) {
-                console.error('Error checking auth status:', err);
-                return false;
+    try {
+        const response = await fetch(`${API_BASE}/api/oauth2status`, {
+            method: 'GET',
+            credentials: 'include',  // CRITICAL: Include cookies/session
+            headers: {
+                'Accept': 'application/json',
+                'Content-Type': 'application/json'
             }
+        });
+        
+        if (!response.ok) {
+            throw new Error('Failed to check auth status');
         }
+        
+        const data = await response.json();
+        // ... rest of your existing code ...
+    } catch (err) {
+        console.error('Error checking auth status:', err);
+        return false;
+    }
+}
 
         function openAuthModal() {
             document.getElementById('authModal').classList.remove('hidden');
@@ -907,57 +869,62 @@
         }
 
         async function startGoogleAuth() {
-            try {
-                // Get authorization URL from backend
-                const response = await fetch(`${API_BASE}/api/oauth2authorize`);
-                const data = await response.json();
-                
-                if (data.success && data.auth_url) {
-                    // Store current frontend URL for redirect back
-                    const currentUrl = window.location.href.split('#')[0];
-                    const redirectUri = `${data.auth_url}&redirect_uri=${encodeURIComponent(currentUrl)}`;
-                    
-                    // Open auth window
-                    const authWindow = window.open(
-                        redirectUri,
-                        'jaydl_auth',
-                        'width=600,height=700,left=100,top=100'
-                    );
-                    
-                    if (!authWindow) {
-                        showAuthError('Popup blocked! Please allow popups for this site.');
-                        return;
-                    }
-                    
-                    // Poll for window close
-                    const checkWindowClosed = setInterval(() => {
-                        if (authWindow.closed) {
-                            clearInterval(checkWindowClosed);
-                            // Check auth status after window closes
-                            setTimeout(() => {
-                                checkAuthStatus().then(authenticated => {
-                                    if (authenticated) {
-                                        showAuthSuccess();
-                                        setTimeout(() => {
-                                            closeAuthModal();
-                                            showSuccess('Successfully signed in with Google!');
-                                        }, 1500);
-                                    } else {
-                                        showAuthError('Authentication failed or was cancelled.');
-                                    }
-                                });
-                            }, 1000);
-                        }
-                    }, 500);
-                    
-                } else {
-                    showAuthError(data.error || 'Failed to start authentication');
-                }
-            } catch (err) {
-                console.error('Auth error:', err);
-                showAuthError('Authentication failed. Please try again.');
-            }
+    try {
+        // Get authorization URL from backend with frontend URL as parameter
+        const frontendUrl = window.location.origin;
+        const response = await fetch(`${API_BASE}/api/oauth2authorize?redirect_uri=${encodeURIComponent(frontendUrl)}`, {
+            credentials: 'include'  // IMPORTANT: Include cookies
+        });
+        
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
+        
+        const data = await response.json();
+        
+        if (data.success && data.auth_url) {
+            // Open auth window
+            const authWindow = window.open(
+                data.auth_url,
+                'jaydl_auth',
+                'width=600,height=700,left=100,top=100'
+            );
+            
+            if (!authWindow) {
+                showAuthError('Popup blocked! Please allow popups for this site.');
+                return;
+            }
+            
+            // Poll for window close
+            const checkWindowClosed = setInterval(() => {
+                if (authWindow.closed) {
+                    clearInterval(checkWindowClosed);
+                    
+                    // Check auth status
+                    setTimeout(() => {
+                        checkAuthStatus().then(authenticated => {
+                            if (authenticated) {
+                                showAuthSuccess();
+                                setTimeout(() => {
+                                    closeAuthModal();
+                                    showSuccess('Successfully signed in with Google!');
+                                }, 1500);
+                            } else {
+                                showAuthError('Authentication failed or was cancelled.');
+                            }
+                        });
+                    }, 1000);
+                }
+            }, 500);
+            
+        } else {
+            showAuthError(data.error || 'Failed to start authentication');
+        }
+    } catch (err) {
+        console.error('Auth error:', err);
+        showAuthError('Authentication failed. Please try again.');
+    }
+}
 
         function showAuthSuccess() {
             document.getElementById('authSuccess').style.display = 'block';

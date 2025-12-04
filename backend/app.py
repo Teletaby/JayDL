@@ -32,16 +32,31 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 app.config.from_pyfile('config.py', silent=True)
 
-# Session configuration for OAuth
+# Session configuration for OAuth - UPDATED FOR CROSS-DOMAIN
 app.secret_key = os.getenv('FLASK_SECRET_KEY', secrets.token_hex(32))
 app.config['SESSION_TYPE'] = 'filesystem'
 app.config['SESSION_PERMANENT'] = False
 app.config['SESSION_USE_SIGNER'] = True
-app.config['SESSION_COOKIE_SECURE'] = os.getenv('FLASK_ENV') == 'production'
+app.config['SESSION_COOKIE_SECURE'] = True  # Always True for HTTPS
 app.config['SESSION_COOKIE_HTTPONLY'] = True
-app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_SAMESITE'] = 'None'  # Changed from 'Lax' to 'None'
 app.config['SESSION_COOKIE_NAME'] = 'jaydl_session'
+app.config['SESSION_COOKIE_DOMAIN'] = '.onrender.com'  # Add this for shared domain
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=1)
+app.config['SESSION_COOKIE_PATH'] = '/'  # Make sure it's accessible everywhere
+
+# Add CORS configuration
+CORS(app,
+     supports_credentials=True,
+     origins=[
+         "http://localhost:8000",
+         "http://127.0.0.1:8000",
+         "https://jaydl-frontend.onrender.com",
+         "https://jaydl-backend.onrender.com"
+     ],
+     allow_headers=["Content-Type", "Authorization", "Accept"],
+     expose_headers=["Set-Cookie"],
+     methods=["GET", "POST", "OPTIONS", "PUT", "DELETE"])
 
 Session(app)
 
@@ -1359,7 +1374,7 @@ def index():
 def authorize():
     """Start OAuth2 authorization flow"""
     try:
-        # Create flow instance to manage the OAuth 2.0 Authorization Grant Flow steps
+        # Create flow instance
         flow = google_auth_oauthlib.flow.Flow.from_client_config(
             {
                 "web": {
@@ -1372,23 +1387,28 @@ def authorize():
             scopes=SCOPES
         )
         
-        # Generate the authorization URL
+        # Use the frontend URL as redirect for better UX
+        frontend_url = request.args.get('redirect_uri', 'https://jaydl-frontend.onrender.com')
         flow.redirect_uri = GOOGLE_REDIRECT_URI
         
         authorization_url, state = flow.authorization_url(
             access_type='offline',
             include_granted_scopes='true',
-            prompt='consent'
+            prompt='consent',
+            state=frontend_url  # Store frontend URL in state
         )
         
-        # Store the state in the session for validation
+        # Store the state in the session
         session['state'] = state
+        session['frontend_url'] = frontend_url
         
-        logger.info(f"Generated authorization URL for OAuth")
+        logger.info(f"Generated authorization URL for OAuth, state: {state}")
         
+        # Return the URL for frontend to redirect to
         return jsonify({
             'success': True,
             'auth_url': authorization_url,
+            'state': state,
             'message': 'Redirect user to this URL for authentication'
         })
     
@@ -1406,10 +1426,11 @@ def oauth2callback():
         # Get the state from the session
         state = session.get('state')
         if not state:
-            return jsonify({
-                'success': False,
-                'error': 'Invalid state parameter'
-            }), 400
+            # Try to get state from query params as fallback
+            state = request.args.get('state')
+            if not state:
+                logger.error("No state parameter found in session or request")
+                return redirect(f"https://jaydl-frontend.onrender.com/#oauth_error=invalid_state")
         
         # Recreate the flow
         flow = google_auth_oauthlib.flow.Flow.from_client_config(
@@ -1449,16 +1470,12 @@ def oauth2callback():
         
         logger.info(f"User authenticated successfully via OAuth")
         
-        # Redirect back to frontend
-        frontend_url = request.args.get('redirect_uri', 'http://localhost:8000')
-        return redirect(f"{frontend_url}#auth_success")
+        # Redirect back to frontend with success
+        return redirect("https://jaydl-frontend.onrender.com/#auth_success")
     
     except Exception as e:
         logger.error(f"OAuth callback error: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': f'Authentication failed: {str(e)}'
-        }), 400
+        return redirect(f"https://jaydl-frontend.onrender.com/#oauth_error={str(e)}")
 
 @app.route('/api/oauth2status')
 def oauth_status():

@@ -884,8 +884,14 @@
         const data = await response.json();
         
         if (data.success && data.auth_url) {
+            // Close the modal before redirecting
+            closeAuthModal();
+            
             // Redirect to Google OAuth (same tab/window - no popup)
-            window.location.href = data.auth_url;
+            // Use setTimeout to ensure modal closes before redirect
+            setTimeout(() => {
+                window.location.href = data.auth_url;
+            }, 100);
         } else {
             showAuthError(data.error || 'Failed to start authentication');
         }

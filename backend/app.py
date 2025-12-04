@@ -1697,6 +1697,186 @@ def get_platforms():
         'platforms': platforms
     })
 
+@app.route('/privacy', methods=['GET'])
+def privacy_policy():
+    """Serve privacy policy"""
+    return '''
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Privacy Policy - JayDL</title>
+        <style>
+            body { font-family: Arial, sans-serif; line-height: 1.6; max-width: 900px; margin: 0 auto; padding: 20px; background: #f4f4f4; }
+            .container { background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+            h1 { color: #333; border-bottom: 3px solid #007bff; padding-bottom: 10px; }
+            h2 { color: #007bff; margin-top: 30px; }
+            p { color: #666; }
+            ul { margin: 10px 0; padding-left: 20px; }
+            li { margin: 8px 0; }
+            .emoji { font-size: 1.2em; margin-right: 5px; }
+            code { background: #f0f0f0; padding: 2px 6px; border-radius: 3px; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>Privacy Policy</h1>
+            <p><strong>Last Updated:</strong> December 5, 2025</p>
+            
+            <h2>Introduction</h2>
+            <p>JayDL is committed to protecting your privacy. This Privacy Policy explains how we collect, use, disclose, and safeguard your information.</p>
+            
+            <h2>Information We Collect</h2>
+            <h3>User Authentication</h3>
+            <ul>
+                <li><strong>Google Account Information:</strong> When you sign in with Google OAuth, we collect your Google profile name and profile picture for display purposes.</li>
+                <li><strong>User ID:</strong> A unique identifier associated with your Google account to personalize your experience.</li>
+            </ul>
+            
+            <h3>Usage Data</h3>
+            <ul>
+                <li><strong>Download History:</strong> Records of videos/audio you download through our service.</li>
+                <li><strong>Preferences:</strong> Your app settings and preferences.</li>
+                <li><strong>Browser Information:</strong> IP address, browser type, operating system (for analytics and security).</li>
+                <li><strong>Cookies:</strong> We use cookies to maintain your session and remember your preferences.</li>
+            </ul>
+            
+            <h2>What We Do NOT Collect</h2>
+            <ul>
+                <li><span class="emoji">❌</span> Your Google account password</li>
+                <li><span class="emoji">❌</span> Your email address (unless you voluntarily provide it)</li>
+                <li><span class="emoji">❌</span> Your contacts or personal data from Google</li>
+                <li><span class="emoji">❌</span> Financial or payment information</li>
+                <li><span class="emoji">❌</span> Sensitive personal information</li>
+            </ul>
+            
+            <h2>How We Use Your Information</h2>
+            <ol>
+                <li><strong>Authentication & Security:</strong> To verify your identity and prevent unauthorized access</li>
+                <li><strong>Service Personalization:</strong> To customize your experience and show your download history</li>
+                <li><strong>Improvement:</strong> To analyze usage patterns and improve our service</li>
+                <li><strong>Legal Compliance:</strong> To comply with legal obligations and enforce our terms</li>
+            </ol>
+            
+            <h2>Data Security</h2>
+            <p>We implement industry-standard security measures to protect your data. However, no method of transmission over the internet is 100% secure.</p>
+            
+            <h2>Third-Party Services</h2>
+            <ul>
+                <li><strong>Google OAuth:</strong> For secure authentication (<a href="https://policies.google.com/privacy">Google's Privacy Policy</a>)</li>
+                <li><strong>YouTube API:</strong> For accessing public video data (<a href="https://www.youtube.com/static?template=terms">YouTube's Terms of Service</a>)</li>
+                <li><strong>Render:</strong> For hosting our service</li>
+            </ul>
+            
+            <h2>Data Retention</h2>
+            <ul>
+                <li>Authentication Data: Retained while you maintain an account</li>
+                <li>Download History: Retained until you clear your browser data or account</li>
+                <li>Session Data: Automatically deleted when you log out</li>
+            </ul>
+            
+            <h2>Your Rights</h2>
+            <p>You have the right to:</p>
+            <ul>
+                <li>Access your personal information</li>
+                <li>Request deletion of your data</li>
+                <li>Withdraw consent at any time by discontinuing use of our service</li>
+            </ul>
+            
+            <h2>Contact Us</h2>
+            <p>If you have questions about this Privacy Policy, please contact us at:</p>
+            <ul>
+                <li><strong>GitHub:</strong> <a href="https://github.com/Teletaby/jaydl-render">https://github.com/Teletaby/jaydl-render</a></li>
+                <li><strong>Email:</strong> gutierrezjustinjames63@gmail.com</li>
+            </ul>
+            
+            <p><strong>By using JayDL, you agree to this Privacy Policy.</strong></p>
+        </div>
+    </body>
+    </html>
+    ''', 200, {'Content-Type': 'text/html; charset=utf-8'}
+
+@app.route('/terms', methods=['GET'])
+def terms_of_service():
+    """Serve terms of service"""
+    return '''
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Terms of Service - JayDL</title>
+        <style>
+            body { font-family: Arial, sans-serif; line-height: 1.6; max-width: 900px; margin: 0 auto; padding: 20px; background: #f4f4f4; }
+            .container { background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+            h1 { color: #333; border-bottom: 3px solid #007bff; padding-bottom: 10px; }
+            h2 { color: #007bff; margin-top: 30px; }
+            p { color: #666; }
+            ul { margin: 10px 0; padding-left: 20px; }
+            li { margin: 8px 0; }
+            ol { margin: 10px 0; padding-left: 20px; }
+            code { background: #f0f0f0; padding: 2px 6px; border-radius: 3px; }
+            a { color: #007bff; text-decoration: none; }
+            a:hover { text-decoration: underline; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>Terms of Service</h1>
+            <p><strong>Last Updated:</strong> December 5, 2025</p>
+            
+            <h2>Acceptance of Terms</h2>
+            <p>By accessing and using JayDL (the "Service"), you accept and agree to be bound by the terms and provision of this agreement.</p>
+            
+            <h2>Use License</h2>
+            <p>Permission is granted to temporarily download one copy of the materials (information or software) on JayDL for personal, non-commercial transitory viewing only. You may not:</p>
+            <ul>
+                <li>Modify or copy the materials</li>
+                <li>Use the materials for any commercial purpose or for any public display</li>
+                <li>Attempt to decompile or reverse engineer any software contained on the Service</li>
+                <li>Remove any copyright or other proprietary notations from the materials</li>
+                <li>Transfer the materials to another person or "mirror" the materials on any other server</li>
+                <li>Violate the Terms of Service of any third-party services (YouTube, Google, etc.)</li>
+            </ul>
+            
+            <h2>Disclaimer</h2>
+            <p>The materials on JayDL are provided on an "as is" basis. We make no warranties, expressed or implied, and hereby disclaim and negate all other warranties.</p>
+            
+            <h2>User Responsibilities</h2>
+            <p>As a user of JayDL, you agree to:</p>
+            <ol>
+                <li><strong>Respect Copyright Laws:</strong> Only download content you have the right to download. Respect copyright laws and the terms of service of the platforms you're downloading from (especially YouTube's Terms of Service).</li>
+                <li><strong>Lawful Use Only:</strong> Use the Service only for lawful purposes and in a way that does not infringe upon the rights of others.</li>
+                <li><strong>No Illegal Content:</strong> Do not download, upload, or share content that is illegal, infringing, pornographic, hateful, threatening, or abusive.</li>
+                <li><strong>Account Security:</strong> You are responsible for maintaining the confidentiality of your account information and password.</li>
+            </ol>
+            
+            <h2>Third-Party Platform Terms</h2>
+            <p>By using JayDL to download content from YouTube or other platforms, you agree to comply with:</p>
+            <ul>
+                <li><strong>YouTube Terms of Service:</strong> <a href="https://www.youtube.com/static?template=terms">https://www.youtube.com/static?template=terms</a></li>
+                <li><strong>Google Terms of Service:</strong> <a href="https://policies.google.com/terms">https://policies.google.com/terms</a></li>
+            </ul>
+            
+            <h2>Content Downloads</h2>
+            <p>We do not store, host, or distribute the content you download. The Service only facilitates the download process. Users are solely responsible for ensuring they have the right to download and use any content.</p>
+            
+            <h2>Limitation of Liability</h2>
+            <p>JayDL shall not be liable for any indirect, incidental, special, consequential, or punitive damages resulting from your use of or inability to use the Service.</p>
+            
+            <h2>Termination</h2>
+            <p>We may terminate your access to the Service at any time, without notice, for any reason whatsoever.</p>
+            
+            <h2>Contact & Support</h2>
+            <p>For questions about these Terms of Service:</p>
+            <ul>
+                <li><strong>GitHub:</strong> <a href="https://github.com/Teletaby/jaydl-render">https://github.com/Teletaby/jaydl-render</a></li>
+                <li><strong>Email:</strong> gutierrezjustinjames63@gmail.com</li>
+            </ul>
+            
+            <p><strong>By using JayDL, you acknowledge that you have read these Terms of Service and agree to be bound by them.</strong></p>
+        </div>
+    </body>
+    </html>
+    ''', 200, {'Content-Type': 'text/html; charset=utf-8'}
+
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""

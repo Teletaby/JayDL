@@ -5,8 +5,9 @@ services:
     env: python
     plan: free
     branch: main
-    buildCommand: pip install --no-cache-dir -r backend/requirements.txt
-    startCommand: cd backend && gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 60 --access-logfile - --error-logfile -
+    buildCommand: cd backend && pip install --no-cache-dir -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 120 --access-logfile - --error-logfile -
+    root_dir: backend
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
@@ -15,12 +16,14 @@ services:
       - key: RAPIDAPI_KEY
         syncWith: RAPIDAPI_KEY
       - key: RAPIDAPI_HOST
-        value: all-media-downloader1.p.rapidapi.com
+        value: spotify-downloader9.p.rapidapi.com
+      - key: API_KEY
+        syncWith: API_KEY
       - key: DOWNLOAD_DIR
-        value: /opt/render/project/src/backend/downloads
+        value: /opt/render/project/src/downloads
     disk:
       name: downloads
-      mountPath: /opt/render/project/src/backend/downloads
+      mountPath: /opt/render/project/src/downloads
       sizeGB: 1
     buildFilter:
       paths:
@@ -36,7 +39,7 @@ services:
     env: static
     plan: free
     branch: main
-    buildCommand: cd frontend && npm run build
+    buildCommand: echo "Frontend ready to deploy"
     publishPath: ./frontend
     routes:
       - type: rewrite

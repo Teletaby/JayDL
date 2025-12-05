@@ -1,6 +1,5 @@
 from flask import Flask, request, jsonify, send_file, redirect, session, url_for
 from flask_cors import CORS
-from flask_session import Session
 import os
 import logging
 from datetime import datetime, timedelta
@@ -34,13 +33,10 @@ logger.info(f"RENDER_EXTERNAL_URL at startup: {os.getenv('RENDER_EXTERNAL_URL')}
 app = Flask(__name__)
 app.config.from_pyfile('config.py', silent=True)
 
-# Session configuration for OAuth
+# Session configuration. Using Flask's default client-side, cookie-based sessions
+# is required for stateless platforms like Render.
 app.secret_key = os.getenv('FLASK_SECRET_KEY', secrets.token_hex(32))
-app.config['SESSION_TYPE'] = 'filesystem'
-app.config['SESSION_PERMANENT'] = True
-app.config['SESSION_USE_SIGNER'] = True
 app.config['SESSION_COOKIE_HTTPONLY'] = True
-app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'  # Keep as Lax
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=1)
 
 # Set cookie settings based on environment
@@ -64,8 +60,6 @@ CORS(app,
      ],
      allow_headers=["Content-Type", "Authorization", "Accept", "Origin"],
      methods=["GET", "POST", "OPTIONS", "PUT", "DELETE"])
-
-Session(app)
 
 # Google OAuth Configuration
 GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID')

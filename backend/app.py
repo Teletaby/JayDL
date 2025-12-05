@@ -239,27 +239,33 @@ class InvidiousDownloader:
         try:
             # Detect platform
             platform = self.detect_platform(url)
-
+ 
             # For YouTube, use Invidious API
             if platform == 'youtube':
                 video_id = self._extract_video_id(url)
                 if not video_id:
                     return {'success': False, 'error': 'Invalid YouTube URL'}
                 
-                # Try Invidious first
+                # --- STRATEGY 1: Direct Invidious ID lookup ---
                 invidious_result = self.get_youtube_info_from_invidious(video_id, user_credentials)
                 if invidious_result:
                     return invidious_result
-
-                # Fallback to yt-dlp if Invidious fails completely
+ 
+                # --- STRATEGY 2: Invidious search-based fallback ---
+                logger.warning("Direct Invidious ID lookup failed. Trying search-based fallback.")
+                invidious_search_result = self._search_invidious_by_title(url, video_id, user_credentials)
+                if invidious_search_result:
+                    return invidious_search_result
+ 
+                # --- STRATEGY 3: Final fallback to yt-dlp ---
                 logger.warning("All Invidious methods failed, using yt-dlp as a final fallback.")
                 return self._get_fallback_info(video_id, user_credentials=user_credentials)
-
+ 
             # For other platforms (TikTok, Instagram, Twitter, Spotify), use yt-dlp
             else:
                 logger.info(f"Analyzing {platform} URL: {url}")
                 return self._get_generic_platform_info(url, platform, user_credentials=user_credentials)
-
+ 
         except Exception as e:
             logger.error(f"Error getting video info: {str(e)}")
             return {'success': False, 'error': f'Failed to get video info: {str(e)}'}
@@ -280,6 +286,72 @@ class InvidiousDownloader:
             except (requests.exceptions.RequestException, json.JSONDecodeError) as e:
                 logger.warning(f"Invidious instance {instance} failed: {e}")
         return None # Return None if all instances fail
+
+    def _get_title_with_yt_dlp(self, url, user_credentials):
+        """A lightweight yt-dlp call to just get the video title."""
+        try:
+            import subprocess
+            base_cmd = self._get_yt_dlp_base_cmd(user_credentials, platform='youtube')
+            cmd = base_cmd + ['--get-title', url]
+            logger.info(f"Getting title with yt-dlp: {' '.join(cmd)}")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+            if result.returncode == 0 and result.stdout.strip():
+                title = result.stdout.strip()
+                logger.info(f"Got title via yt-dlp: {title}")
+                return title
+            else:
+                logger.warning(f"Failed to get title with yt-dlp. Stderr: {result.stderr.strip()}")
+                return None
+        except Exception as e:
+            logger.error(f"Exception while getting title with yt-dlp: {e}")
+            return None
+
+    def _search_invidious_by_title(self, url, video_id, user_credentials):
+        """Searches Invidious for a video by its title as a fallback."""
+        logger.info(f"Starting Invidious search-based fallback for video ID: {video_id}")
+        
+        # 1. Get the real title of the video using a lightweight yt-dlp call
+        title = self._get_title_with_yt_dlp(url, user_credentials)
+        if not title:
+            logger.error("Could not get title for search-based fallback. Aborting search.")
+            return None
+
+        from urllib.parse import quote
+        encoded_title = quote(title)
+
+        # 2. Loop through Invidious instances and search
+        for instance in self.invidious_instances:
+            try:
+                search_url = f"{instance}/api/v1/search?q={encoded_title}"
+                logger.info(f"Searching on Invidious instance: {search_url}")
+                
+                search_response = requests.get(search_url, timeout=10)
+                if search_response.status_code != 200:
+                    logger.warning(f"Invidious search on {instance} failed with status {search_response.status_code}")
+                    continue
+
+                search_results = search_response.json()
+                
+                # 3. Find the matching video in the search results
+                found_video = next((item for item in search_results if item.get('type') == 'video' and item.get('videoId') == video_id), None)
+                
+                if found_video:
+                    logger.info(f"Found matching video ID {video_id} in search results from {instance}")
+                    # 4. Now that we have a working instance, make a direct API call to get full details
+                    info_url = f"{instance}/api/v1/videos/{video_id}"
+                    info_response = requests.get(info_url, timeout=7)
+                    if info_response.status_code == 200:
+                        data = info_response.json()
+                        logger.info(f"Successfully got full data from {instance} after search.")
+                        parsed_data = self._parse_invidious_response(data, video_id, user_credentials=user_credentials)
+                        if parsed_data and parsed_data.get('success'):
+                            parsed_data['source'] = 'invidious-search' # Override source
+                        return parsed_data
+            except (requests.exceptions.RequestException, json.JSONDecodeError) as e:
+                logger.warning(f"Invidious search on instance {instance} failed: {e}")
+        
+        logger.error(f"Invidious search-based fallback failed for video ID: {video_id} across all instances.")
+        return None
 
     def _get_generic_platform_info(self, url, platform, user_credentials=None):
         """Get video info from yt-dlp for non-YouTube platforms, or RapidAPI for Spotify"""
@@ -516,54 +588,59 @@ class InvidiousDownloader:
             return self._get_fallback_info(video_id, user_credentials=user_credentials)
     
     def _get_fallback_info(self, video_id, user_credentials=None):
-        """Return basic info when API fails - try to get title from yt-dlp"""
+        """
+        Final fallback using yt-dlp. This should return a failure if it cannot get real info.
+        """
         try:
             import subprocess
             import json
-            
+
             base_cmd = self._get_yt_dlp_base_cmd(user_credentials, platform='youtube')
             cmd = base_cmd + ['--dump-json', f'https://www.youtube.com/watch?v={video_id}']
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)  # Increased from 10 to 30 seconds
-            
-            title = f'Video {video_id[:8]}...'
-            duration = 'Unknown'
-            uploader = 'Unknown'
-            
-            if result.returncode == 0:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+
+            if result.returncode == 0 and result.stdout:
                 try:
                     data = json.loads(result.stdout)
-                    title = data.get('title', title)
-                    # Extract duration in seconds and format it
+                    title = data.get('title')
+                    if not title: # If title is empty, it's not a valid response
+                        raise ValueError("yt-dlp returned JSON without a title.")
+
                     duration_seconds = data.get('duration', 0)
-                    if duration_seconds:
-                        duration = self._format_duration(duration_seconds)
-                    # Extract uploader/channel name
+                    duration = self._format_duration(duration_seconds) if duration_seconds else 'Unknown'
                     uploader = data.get('uploader', data.get('channel', data.get('creator', 'Unknown')))
-                    logger.info(f"Got info from yt-dlp: {title} by {uploader} ({duration})")
-                except Exception as e:
-                    logger.warning(f"Error parsing yt-dlp data: {e}")
-            else:
-                logger.warning(f"yt-dlp fallback info failed for {video_id}. Stderr: {result.stderr[:500]}")
+                    logger.info(f"Got info from yt-dlp fallback: {title} by {uploader} ({duration})")
+
+                    # Get formats
+                    formats = self._get_available_formats(f'https://www.youtube.com/watch?v={video_id}', user_credentials=user_credentials)
+
+                    return {
+                        'success': True,
+                        'title': title,
+                        'duration': duration,
+                        'thumbnail': f'https://i.ytimg.com/vi/{video_id}/maxresdefault.jpg',
+                        'uploader': uploader,
+                        'view_count': data.get('view_count', 0),
+                        'formats': formats,
+                        'platform': 'youtube',
+                        'video_id': video_id,
+                        'source': 'yt-dlp-fallback'
+                    }
+                except (json.JSONDecodeError, ValueError) as e:
+                    logger.warning(f"Error parsing yt-dlp data in fallback: {e}")
+                    # Fall through to failure case
+            
+            # If we reach here, it means yt-dlp failed or parsing failed.
+            error_msg = result.stderr.strip() if result.stderr else "yt-dlp fallback failed to produce valid JSON output."
+            logger.error(f"yt-dlp fallback info failed for {video_id}. Stderr: {error_msg}")
+            return {'success': False, 'error': error_msg}
+
+        except subprocess.TimeoutExpired:
+            logger.error(f"yt-dlp fallback timed out for video ID: {video_id}")
+            return {'success': False, 'error': 'Analysis timed out. The server may be under heavy load.'}
         except Exception as e:
-            logger.error(f"Error getting fallback info: {e}")
-            title = f'Video {video_id[:8]}...'
-            duration = 'Unknown'
-            uploader = 'Unknown'
-        
-        # Get actual available formats from yt-dlp
-        formats = self._get_available_formats(f'https://www.youtube.com/watch?v={video_id}', user_credentials=user_credentials)
-        
-        return {
-            'success': True,
-            'title': title,
-            'duration': duration,
-            'thumbnail': f'https://i.ytimg.com/vi/{video_id}/maxresdefault.jpg',
-            'uploader': uploader,
-            'view_count': 0,
-            'formats': formats,
-            'platform': 'youtube',
-            'video_id': video_id
-        }
+            logger.error(f"Exception in _get_fallback_info: {e}")
+            return {'success': False, 'error': str(e)}
     
     def _get_default_formats(self):
         """Return default format options"""

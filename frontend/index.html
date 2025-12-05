@@ -137,6 +137,7 @@
                                 <span id="mediaDuration" style="display: none;"><i class="fas fa-clock"></i> <span id="durationValue">0:00</span></span>
                                 <span id="mediaUploader" style="display: none;"><i class="fas fa-user"></i> <span id="uploaderValue">Unknown</span></span>
                                 <span id="mediaPlatform" style="display: none;"><i class="fas fa-globe"></i> <span id="platformValue">Unknown</span></span>
+                                <span id="mediaSource" style="display: none;"><i class="fas fa-cogs"></i> Source: <span id="sourceValue"></span></span>
                             </div>
                         </div>
                     </div>
@@ -601,6 +602,20 @@
                 document.getElementById('mediaPlatform').style.display = 'flex';
             } else {
                 document.getElementById('mediaPlatform').style.display = 'none';
+            }
+
+            // Show analysis source if available
+            const sourceSpan = document.getElementById('mediaSource');
+            if (data.source) {
+                let sourceText = data.source;
+                if (data.source === 'invidious') sourceText = 'Invidious (Direct)';
+                if (data.source === 'invidious-search') sourceText = 'Invidious (Search)';
+                if (data.source === 'yt-dlp-fallback') sourceText = 'yt-dlp (Fallback)';
+                
+                document.getElementById('sourceValue').textContent = sourceText;
+                sourceSpan.style.display = 'flex';
+            } else {
+                sourceSpan.style.display = 'none';
             }
 
             // Debug: log the formats

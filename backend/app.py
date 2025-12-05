@@ -18,6 +18,9 @@ from urllib.parse import urlencode
 import secrets
 import hashlib
 from functools import wraps
+import random
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 import sys
 
 
@@ -79,6 +82,17 @@ CORS(app,
      ],
      allow_headers=["Content-Type", "Authorization", "Accept", "Origin"],
      methods=["GET", "POST", "OPTIONS", "PUT", "DELETE"])
+
+# Rate limiting configuration
+# NOTE: In a multi-worker environment (like Render with Gunicorn), 'memory://' storage
+# means each worker has its own rate limit counter. For synchronized limits,
+# a centralized backend like Redis would be needed (e.g., 'redis://...').
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=["100 per hour", "30 per minute"],
+    storage_uri="memory://",
+)
 
 # Google OAuth Configuration
 GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID')
@@ -205,6 +219,13 @@ class InvidiousDownloader:
             'https://invidious.kavin.rocks',
             'https://inv.nadeko.net'
         ]
+        self.piped_instances = [
+            'https://pipedapi.kavin.rocks',
+            'https://pipedapi.moomoo.me',
+            'https://pipedapi.smnz.de',
+            'https://pipedapi.adminforge.de',
+            'https://piped-api.lunar.icu'
+        ]
         self.api_instance = os.getenv('INVIDIOUS_INSTANCE', self.invidious_instances[0])
     
     def ensure_directories(self):
@@ -212,7 +233,7 @@ class InvidiousDownloader:
     
     def _get_yt_dlp_base_cmd(self, user_credentials=None, platform='generic'):
         """Constructs the base command for yt-dlp, handling authentication."""
-        cmd = ['yt-dlp', '--no-warnings']
+        cmd = ['yt-dlp', '--no-warnings', '--geo-bypass']
 
         # For YouTube, add extractor args to avoid blocking on servers
         if platform == 'youtube':
@@ -229,8 +250,14 @@ class InvidiousDownloader:
             logger.info("Using browser cookies for local development as fallback.")
             cmd.extend(['--cookies-from-browser', 'chrome'])
         else:
-            # Priority 3: Unauthenticated request (on Render without token, or if local chrome fails)
-            logger.info("Making unauthenticated request.")
+            # Priority 3: Unauthenticated request with rotating user-agent
+            logger.info("Making unauthenticated request with rotated user-agent.")
+            user_agents = [
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            ]
+            cmd.extend(['--user-agent', random.choice(user_agents)])
         
         return cmd
     
@@ -246,19 +273,27 @@ class InvidiousDownloader:
                 if not video_id:
                     return {'success': False, 'error': 'Invalid YouTube URL'}
                 
-                # --- STRATEGY 1: Direct Invidious ID lookup ---
+                # --- STRATEGY 1: Direct Invidious ID lookup (provides direct download links) ---
                 invidious_result = self.get_youtube_info_from_invidious(video_id, user_credentials)
-                if invidious_result:
+                if invidious_result and invidious_result.get('source') == 'invidious':
+                    logger.info("Success with Invidious direct links.")
                     return invidious_result
  
-                # --- STRATEGY 2: Invidious search-based fallback ---
-                logger.warning("Direct Invidious ID lookup failed. Trying search-based fallback.")
+                # --- STRATEGY 2: Piped API lookup (provides metadata, server-side download) ---
+                logger.warning("Invidious direct link method failed or didn't provide links. Trying Piped API.")
+                piped_result = self.get_youtube_info_from_piped(video_id, user_credentials)
+                if piped_result:
+                    logger.info("Success with Piped for metadata.")
+                    return piped_result
+
+                # --- STRATEGY 3: Invidious search-based fallback ---
+                logger.warning("Piped API failed. Trying Invidious search-based fallback.")
                 invidious_search_result = self._search_invidious_by_title(url, video_id, user_credentials)
                 if invidious_search_result:
                     return invidious_search_result
  
-                # --- STRATEGY 3: Final fallback to yt-dlp ---
-                logger.warning("All Invidious methods failed, using yt-dlp as a final fallback.")
+                # --- STRATEGY 4: Final fallback to yt-dlp ---
+                logger.warning("All Invidious/Piped methods failed, using yt-dlp as a final fallback.")
                 return self._get_fallback_info(video_id, user_credentials=user_credentials)
  
             # For other platforms (TikTok, Instagram, Twitter, Spotify), use yt-dlp
@@ -286,6 +321,52 @@ class InvidiousDownloader:
             except (requests.exceptions.RequestException, json.JSONDecodeError) as e:
                 logger.warning(f"Invidious instance {instance} failed: {e}")
         return None # Return None if all instances fail
+
+    def get_youtube_info_from_piped(self, video_id, user_credentials=None):
+        """Tries to get video info from Piped API."""
+        logger.info(f"Analyzing YouTube video ID via Piped: {video_id}")
+        for instance in self.piped_instances:
+            try:
+                # Piped API endpoint for stream info, which includes metadata
+                info_url = f"{instance}/streams/{video_id}"
+                logger.info(f"Trying Piped instance: {instance}")
+                response = requests.get(info_url, timeout=7)
+                if response.status_code == 200:
+                    data = response.json()
+                    logger.info(f"Successfully got data from Piped instance {instance}")
+                    return self._parse_piped_response(data, video_id, user_credentials=user_credentials)
+                logger.warning(f"Piped instance {instance} returned {response.status_code}")
+            except (requests.exceptions.RequestException, json.JSONDecodeError) as e:
+                logger.warning(f"Piped instance {instance} failed: {e}")
+        return None
+
+    def _parse_piped_response(self, data, video_id, user_credentials=None):
+        """Parse Piped API response. Piped provides separate streams, so downloads will be server-side."""
+        try:
+            title = data.get('title', f'Video {video_id[:8]}...')
+            duration = self._format_duration(data.get('duration', 0))
+            uploader = data.get('uploader', 'Unknown')
+            views = data.get('views', 0)
+            thumbnail = data.get('thumbnailUrl', f'https://i.ytimg.com/vi/{video_id}/maxresdefault.jpg')
+            
+            logger.info(f"Got video info from Piped: {title} by {uploader}")
+            
+            # Piped provides separate audio/video streams. We cannot provide a direct download link
+            # for a combined file. We will use yt-dlp for downloading, but we can use Piped's metadata.
+            # We still need to get available formats from yt-dlp.
+            logger.info("Piped provided metadata. Getting available formats via yt-dlp.")
+            formats = self._get_available_formats(f'https://www.youtube.com/watch?v={video_id}', user_credentials=user_credentials)
+            
+            return {
+                'success': True, 'title': title, 'duration': duration, 'thumbnail': thumbnail,
+                'uploader': uploader, 'view_count': views, 'formats': formats,
+                'platform': 'youtube', 'video_id': video_id,
+                'source': 'piped' # Important for download logic - indicates server-side download needed
+            }
+        except Exception as e:
+            logger.error(f"Error parsing Piped response: {e}")
+            # If parsing fails, it's not a fatal error for the whole process, we can try other sources.
+            return None
 
     def _get_title_with_yt_dlp(self, url, user_credentials):
         """A lightweight yt-dlp call to just get the video title."""
@@ -1623,6 +1704,7 @@ def shared_account_status():
         }), 500
 
 @app.route('/api/analyze', methods=['POST'])
+@limiter.limit("20 per minute")
 def analyze_media():
     """Analyze a URL and return media information"""
     try:
@@ -1658,6 +1740,7 @@ def analyze_media():
         }), 500
 
 @app.route('/api/download', methods=['POST'])
+@limiter.limit("10 per minute")
 def download_media():
     """Download media from URL"""
     try:

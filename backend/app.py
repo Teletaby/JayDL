@@ -195,11 +195,15 @@ class InvidiousDownloader:
         
         # Invidious instances (fallback list)
         self.invidious_instances = [
-            "https://invidious.io.lol",
-            "https://vid.puffyan.us",
-            "https://inv.id.is",
-            "https://invidious.projectsegfau.lt",
-            "https://invidious.kavin.rocks",
+            'https://inv.vern.cc',
+            'https://invidious.io.lol',
+            'https://vid.puffyan.us',
+            'https://yt.artemislena.eu',
+            'https://invidious.namazso.eu',
+            'https://inv.riverside.rocks',
+            'https://yewtu.be',
+            'https://invidious.kavin.rocks',
+            'https://inv.nadeko.net'
         ]
         self.api_instance = os.getenv('INVIDIOUS_INSTANCE', self.invidious_instances[0])
     
@@ -209,21 +213,25 @@ class InvidiousDownloader:
     def _get_yt_dlp_base_cmd(self, user_credentials=None, platform='generic'):
         """Constructs the base command for yt-dlp, handling authentication."""
         cmd = ['yt-dlp', '--no-warnings']
-        
+
+        # For YouTube, add extractor args to avoid blocking on servers
+        if platform == 'youtube':
+            logger.info("Using 'android' player client for YouTube to improve reliability.")
+            cmd.extend(['--extractor-args', 'youtube:player_client=android'])
+
+        # Authentication logic
         # Priority 1: Use OAuth token for YouTube if available
         if platform == 'youtube' and user_credentials and user_credentials.token:
             logger.info("Using OAuth token for YouTube request.")
             cmd.extend(['--add-header', f"Authorization: Bearer {user_credentials.token}"])
-            return cmd
-
         # Priority 2: Use browser cookies for local dev (if not on Render)
-        if os.getenv('RENDER') != 'true':
+        elif os.getenv('RENDER') != 'true':
             logger.info("Using browser cookies for local development as fallback.")
             cmd.extend(['--cookies-from-browser', 'chrome'])
-            return cmd
-
-        # Priority 3: Unauthenticated request (on Render without token, or if local chrome fails)
-        logger.info("Making unauthenticated request.")
+        else:
+            # Priority 3: Unauthenticated request (on Render without token, or if local chrome fails)
+            logger.info("Making unauthenticated request.")
+        
         return cmd
     
     def get_video_info(self, url, user_credentials=None):

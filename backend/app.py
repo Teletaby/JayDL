@@ -16,6 +16,7 @@ from googleapiclient.errors import HttpError
 import json
 from urllib.parse import urlencode
 import secrets
+import hashlib
 from functools import wraps
 
 
@@ -32,6 +33,26 @@ logger.info(f"RENDER_EXTERNAL_URL at startup: {os.getenv('RENDER_EXTERNAL_URL')}
 
 app = Flask(__name__)
 
+# Check for required secret key in multi-worker environments
+if os.getenv('RENDER') == 'true':
+    # Gunicorn sets WEB_CONCURRENCY. Default is 1.
+    try:
+        workers = int(os.getenv('WEB_CONCURRENCY', 1))
+    except (ValueError, TypeError):
+        workers = 1
+    
+    # Add logging to verify the secret key is consistent across workers
+    secret_key = os.getenv('FLASK_SECRET_KEY')
+    if secret_key:
+        key_hash = hashlib.sha256(secret_key.encode()).hexdigest()
+        logger.info(f"FLASK_SECRET_KEY is set. SHA256 hash: {key_hash[:16]}...")
+    else:
+        logger.warning("FLASK_SECRET_KEY is NOT set. An ephemeral key will be used.")
+
+    if workers > 1 and not secret_key:
+        logger.critical("FATAL: FLASK_SECRET_KEY environment variable is not set.")
+        raise ValueError("A static FLASK_SECRET_KEY is required in a multi-worker environment.")
+
 # Session configuration. Using Flask's default client-side, cookie-based sessions
 # is required for stateless platforms like Render.
 app.secret_key = os.getenv('FLASK_SECRET_KEY', secrets.token_hex(32))
@@ -42,11 +63,9 @@ app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=1)
 if os.getenv('RENDER') == 'true':
     app.config['SESSION_COOKIE_SECURE'] = True
     app.config['SESSION_COOKIE_SAMESITE'] = 'None'
-    app.config['SESSION_COOKIE_DOMAIN'] = '.onrender.com'
 else:
     app.config['SESSION_COOKIE_SECURE'] = False
     app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
-    app.config['SESSION_COOKIE_DOMAIN'] = None
 
 # Add CORS configuration
 CORS(app,

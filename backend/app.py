@@ -195,10 +195,11 @@ class InvidiousDownloader:
         
         # Invidious instances (fallback list)
         self.invidious_instances = [
-            'https://invidious.io',
-            'https://inv.vern.cc',
-            'https://invidious.snopyta.org',
-            'https://inv.nadeko.net'
+            "https://invidious.io.lol",
+            "https://vid.puffyan.us",
+            "https://inv.id.is",
+            "https://invidious.projectsegfau.lt",
+            "https://invidious.kavin.rocks",
         ]
         self.api_instance = os.getenv('INVIDIOUS_INSTANCE', self.invidious_instances[0])
     
@@ -230,50 +231,48 @@ class InvidiousDownloader:
         try:
             # Detect platform
             platform = self.detect_platform(url)
-            
+
             # For YouTube, use Invidious API
             if platform == 'youtube':
-                # Extract video ID from URL
                 video_id = self._extract_video_id(url)
                 if not video_id:
                     return {'success': False, 'error': 'Invalid YouTube URL'}
                 
-                logger.info(f"Analyzing YouTube video ID: {video_id}")
-                
-                # Try each Invidious instance
-                for instance in self.invidious_instances:
-                    try:
-                        info_url = f"{instance}/api/v1/videos/{video_id}"
-                        logger.info(f"Trying Invidious instance: {instance}")
-                        response = requests.get(info_url, timeout=5)
-                        
-                        if response.status_code == 200:
-                            data = response.json()
-                            logger.info(f"Successfully got data from {instance}")
-                            return self._parse_invidious_response(data, video_id, user_credentials=user_credentials)
-                        else:
-                            logger.warning(f"{instance} returned {response.status_code}")
-                            
-                    except requests.exceptions.Timeout:
-                        logger.warning(f"{instance} timed out")
-                    except requests.exceptions.ConnectionError:
-                        logger.warning(f"{instance} connection failed")
-                    except Exception as e:
-                        logger.warning(f"{instance} error: {e}")
-                
-                # All instances failed, use fallback
-                logger.warning("All Invidious instances failed, using fallback info")
+                # Try Invidious first
+                invidious_result = self.get_youtube_info_from_invidious(video_id, user_credentials)
+                if invidious_result:
+                    return invidious_result
+
+                # Fallback to yt-dlp if Invidious fails completely
+                logger.warning("All Invidious methods failed, using yt-dlp as a final fallback.")
                 return self._get_fallback_info(video_id, user_credentials=user_credentials)
-            
+
             # For other platforms (TikTok, Instagram, Twitter, Spotify), use yt-dlp
             else:
                 logger.info(f"Analyzing {platform} URL: {url}")
                 return self._get_generic_platform_info(url, platform, user_credentials=user_credentials)
-            
+
         except Exception as e:
             logger.error(f"Error getting video info: {str(e)}")
             return {'success': False, 'error': f'Failed to get video info: {str(e)}'}
-    
+
+    def get_youtube_info_from_invidious(self, video_id, user_credentials=None):
+        """Tries to get video info and stream URLs from Invidious."""
+        logger.info(f"Analyzing YouTube video ID via Invidious: {video_id}")
+        for instance in self.invidious_instances:
+            try:
+                info_url = f"{instance}/api/v1/videos/{video_id}"
+                logger.info(f"Trying Invidious instance: {instance}")
+                response = requests.get(info_url, timeout=7)
+                if response.status_code == 200:
+                    data = response.json()
+                    logger.info(f"Successfully got data from {instance}")
+                    return self._parse_invidious_response(data, video_id, user_credentials=user_credentials)
+                logger.warning(f"{instance} returned {response.status_code}")
+            except (requests.exceptions.RequestException, json.JSONDecodeError) as e:
+                logger.warning(f"Invidious instance {instance} failed: {e}")
+        return None # Return None if all instances fail
+
     def _get_generic_platform_info(self, url, platform, user_credentials=None):
         """Get video info from yt-dlp for non-YouTube platforms, or RapidAPI for Spotify"""
         try:
@@ -445,20 +444,52 @@ class InvidiousDownloader:
             return {'success': False, 'error': f'Failed to analyze Spotify URL: {str(e)}'}
     
     def _parse_invidious_response(self, data, video_id, user_credentials=None):
-        """Parse Invidious API response"""
+        """Parse Invidious API response and extract native formats if available."""
         try:
             title = data.get('title', f'Video {video_id[:8]}...')
-            duration = self._format_duration(data.get('length', 0))
+            duration = self._format_duration(data.get('lengthSeconds', 0))
             uploader = data.get('author', 'Unknown')
             views = data.get('viewCount', 0)
-            
-            # Get thumbnail
             thumbnail = f'https://i.ytimg.com/vi/{video_id}/maxresdefault.jpg'
             
             logger.info(f"Got video info: {title} by {uploader}")
             
-            # Get actual available formats from yt-dlp
-            formats = self._get_available_formats(f'https://www.youtube.com/watch?v={video_id}', user_credentials=user_credentials)
+            # NEW: Try to get formats directly from Invidious response
+            formats = []
+            source = 'yt-dlp' # Default source
+
+            # Video streams with audio (from formatStreams)
+            for stream in data.get('formatStreams', []):
+                if 'video' in stream.get('type', '') and stream.get('url'):
+                    formats.append({
+                        'format_id': f"invidious_{stream.get('qualityLabel')}",
+                        'resolution': stream.get('qualityLabel'),
+                        'filesize': stream.get('size'),
+                        'type': 'video',
+                        'container': stream.get('container'),
+                        'url': stream.get('url') # Direct download URL
+                    })
+
+            # Audio-only streams (from adaptiveFormats)
+            for stream in data.get('adaptiveFormats', []):
+                if stream.get('type', '') == 'audio' and stream.get('url'):
+                    formats.append({
+                        'format_id': f"invidious_audio_{stream.get('audioQuality')}",
+                        'format': f"Audio ({stream.get('encoding')})",
+                        'resolution': f"Audio ({stream.get('audioQuality')})",
+                        'filesize': stream.get('size'),
+                        'type': 'audio',
+                        'container': stream.get('container'),
+                        'url': stream.get('url') # Direct download URL
+                    })
+            
+            if formats:
+                logger.info(f"Successfully extracted {len(formats)} native stream URLs from Invidious.")
+                source = 'invidious'
+            else:
+                # Fallback to yt-dlp for formats if Invidious didn't provide them
+                logger.warning("Invidious did not provide stream URLs, falling back to yt-dlp for formats.")
+                formats = self._get_available_formats(f'https://www.youtube.com/watch?v={video_id}', user_credentials=user_credentials)
             
             return {
                 'success': True,
@@ -469,7 +500,8 @@ class InvidiousDownloader:
                 'view_count': views,
                 'formats': formats,
                 'platform': 'youtube',
-                'video_id': video_id
+                'video_id': video_id,
+                'source': source # Important for download logic
             }
         except Exception as e:
             logger.error(f"Error parsing Invidious response: {e}")
@@ -1555,6 +1587,23 @@ def download_media():
         if not url:
             return jsonify({'success': False, 'error': 'URL is required'}), 400
         
+        # Check for Invidious direct download
+        if quality and 'invidious' in quality:
+            logger.info(f"Attempting direct download via Invidious for quality: {quality}")
+            video_id = downloader._extract_video_id(url)
+            if video_id:
+                # Re-analyze with Invidious to get fresh URLs
+                invidious_info = downloader.get_youtube_info_from_invidious(video_id)
+                if invidious_info and invidious_info.get('source') == 'invidious':
+                    selected_format = next((f for f in invidious_info.get('formats', []) if f.get('format_id') == quality), None)
+                    if selected_format and selected_format.get('url'):
+                        logger.info("✅ Found direct Invidious URL. Sending to client.")
+                        return jsonify({
+                            'success': True,
+                            'download_url': selected_format['url'] # This is an absolute URL
+                        })
+            logger.warning("Invidious direct download failed, falling back to yt-dlp.")
+
         logger.info(f"Downloading: {url} | Quality: {quality} | Type: {media_type}")
         
         # Get user credentials if authenticated

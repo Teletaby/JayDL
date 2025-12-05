@@ -283,6 +283,17 @@ header p {
     box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
 }
 
+.btn-primary.authenticated {
+    background: linear-gradient(135deg, #10b981 0%, #0f9b6e 100%);
+    cursor: default;
+}
+
+.btn-primary.authenticated:hover {
+    background: linear-gradient(135deg, #10b981 0%, #0f9b6e 100%);
+    transform: none;
+    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+}
+
 .btn-download:disabled {
     background: #cccccc;
     cursor: not-allowed;
@@ -874,4 +885,3 @@ header p {
         min-width: 100%;
     }
 }
-

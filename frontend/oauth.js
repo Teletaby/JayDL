@@ -45,8 +45,11 @@
                 if (setupData.success) {
                     alert(`✅ Shared account setup successful!\n\nAccount: ${setupData.account_info.channel_name}\n\nAll users can now download freely!`);
                     localStorage.setItem('yt_authenticated', 'true');
-                    const btn = document.getElementById('ytAuthBtn');
-                    if (btn) btn.classList.add('authenticated');
+                    const btn = document.getElementById('adminAuthBtn');
+                    if (btn) {
+                        btn.classList.add('authenticated');
+                        btn.innerHTML = '<i class="fas fa-check-circle"></i> Shared Account Set';
+                    }
                 } else {
                     alert(`❌ Failed to save as shared account:\n\n${setupData.error || setupData.message}`);
                 }
@@ -56,8 +59,11 @@
             }
         } else {
             localStorage.setItem('yt_authenticated', 'true');
-            const btn = document.getElementById('ytAuthBtn');
-            if (btn) btn.classList.add('authenticated');
+            const btn = document.getElementById('adminAuthBtn');
+            if (btn) {
+                btn.classList.add('authenticated');
+                btn.innerHTML = '<i class="fas fa-check"></i> Authenticated (Personal)';
+            }
             alert('✅ You are now authenticated. Your personal account will be used for downloads.');
         }
     };
@@ -112,10 +118,12 @@
             const data = await resp.json();
             if (data.success) {
                 localStorage.removeItem('yt_authenticated');
-                const btn = document.getElementById('ytAuthBtn');
-                if (btn) btn.classList.remove('authenticated');
+                const btn = document.getElementById('adminAuthBtn');
+                if (btn) {
+                    btn.classList.remove('authenticated');
+                    btn.innerHTML = '<i class="fab fa-google"></i> Authenticate with Google';
+                }
                 alert('✅ YouTube authentication revoked successfully.');
-                window.location.reload(); // Reload to reflect logged-out state
             } else {
                 alert('❌ Failed to revoke authentication: ' + (data.error || 'Unknown error'));
             }

@@ -497,7 +497,14 @@
                     displayMediaInfo(data);
                     showSuccess('Media analyzed successfully!');
                 } else {
-                    showError(data.error || 'Failed to analyze media');
+                    const url = document.getElementById('urlInput').value.trim();
+                    const isYouTubeUrl = url.includes('youtube.com') || url.includes('youtu.be');
+                    let errorMsg = data.error || 'Failed to analyze media';
+
+                    if (isYouTubeUrl && errorMsg.includes('Failed to extract any player response')) {
+                        errorMsg += '<br><br><b>Suggestion:</b> This can happen with music or region-locked videos. Try authenticating via the <b>Admin Panel</b> to resolve this.';
+                    }
+                    showError(errorMsg);
                 }
             } catch (err) {
                 hideLoading();
@@ -671,7 +678,12 @@
                 if (data.success) {
                     // Trigger download
                     if (data.download_url) {
-                        window.location.href = `${API_BASE}${data.download_url}`;
+                        let finalUrl = data.download_url;
+                        // Handle both relative paths from our backend and absolute URLs from services like Invidious
+                        if (finalUrl.startsWith('/')) {
+                            finalUrl = `${API_BASE}${finalUrl}`;
+                        }
+                        window.location.href = finalUrl;
                         showSuccess('Download started! Check your downloads folder.');
                     } else if (data.filename) {
                         // Construct download URL if not provided

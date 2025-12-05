@@ -83,6 +83,30 @@ SCOPES = [
 DOWNLOAD_DIR = os.getenv('DOWNLOAD_DIR', os.path.join(os.path.dirname(__file__), 'downloads'))
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
+# Shared account credentials storage
+SHARED_CREDENTIALS_FILE = os.path.join(DOWNLOAD_DIR, '.shared_credentials.json')
+
+def save_shared_credentials(credentials_dict):
+    """Save shared account credentials to file"""
+    try:
+        with open(SHARED_CREDENTIALS_FILE, 'w') as f:
+            json.dump(credentials_dict, f)
+        logger.info("Shared credentials saved successfully")
+        return True
+    except Exception as e:
+        logger.error(f"Error saving shared credentials: {str(e)}")
+        return False
+
+def load_shared_credentials():
+    """Load shared account credentials from file"""
+    try:
+        if os.path.exists(SHARED_CREDENTIALS_FILE):
+            with open(SHARED_CREDENTIALS_FILE, 'r') as f:
+                return json.load(f)
+    except Exception as e:
+        logger.error(f"Error loading shared credentials: {str(e)}")
+    return None
+
 class SpotifyRateLimitTracker:
     """Track Spotify downloads and enforce daily rate limits"""
     def __init__(self, limit_per_day=20):
@@ -1102,14 +1126,29 @@ downloader = InvidiousDownloader(base_dir=DOWNLOAD_DIR)
 # =============== OAUTH HELPER FUNCTIONS ===============
 
 def is_authenticated():
-    """Check if user is authenticated with Google OAuth"""
-    return 'credentials' in session
+    """Check if user is authenticated with Google OAuth (personal or shared)"""
+    # Check for personal credentials first
+    if 'credentials' in session:
+        return True
+    # Fall back to shared account
+    shared_creds = load_shared_credentials()
+    return shared_creds is not None
 
 def get_user_credentials():
-    """Get user credentials from session"""
+    """Get user credentials from session or shared account"""
+    # Check for personal credentials first
     if 'credentials' in session:
         creds_dict = session['credentials']
         return google.oauth2.credentials.Credentials(**creds_dict)
+    
+    # Fall back to shared account credentials
+    shared_creds = load_shared_credentials()
+    if shared_creds:
+        try:
+            return google.oauth2.credentials.Credentials(**shared_creds)
+        except Exception as e:
+            logger.warning(f"Failed to create credentials from shared account: {str(e)}")
+    
     return None
 
 def requires_auth(f):
@@ -1315,6 +1354,129 @@ def oauth_logout():
         'success': True,
         'message': 'Logged out successfully'
     })
+
+@app.route('/api/oauth2/setup-shared-account')
+def setup_shared_account():
+    """Setup endpoint for shared account - use after authenticating with shared Gmail"""
+    try:
+        # This endpoint should only be called after user authenticates
+        # It will store the OAuth credentials as shared credentials
+        if not is_authenticated():
+            return jsonify({
+                'success': False,
+                'error': 'User must be authenticated first',
+                'message': 'Please authenticate with the shared Gmail account first'
+            }), 401
+        
+        # Get credentials from session
+        if 'credentials' not in session:
+            return jsonify({
+                'success': False,
+                'error': 'No user credentials found'
+            }), 400
+        
+        creds_dict = session['credentials']
+        
+        # Verify this is the shared account by checking the channel name
+        try:
+            creds = google.oauth2.credentials.Credentials(**creds_dict)
+            youtube = build('youtube', 'v3', credentials=creds)
+            request_info = youtube.channels().list(
+                part='snippet',
+                mine=True
+            )
+            response = request_info.execute()
+            
+            if response.get('items'):
+                channel_email = response['items'][0]['snippet']['customUrl'] or 'Unknown'
+                channel_name = response['items'][0]['snippet']['title']
+                logger.info(f"Setting up shared account: {channel_name}")
+            else:
+                return jsonify({
+                    'success': False,
+                    'error': 'Could not verify account information'
+                }), 400
+        except Exception as e:
+            logger.error(f"Error verifying account: {str(e)}")
+            return jsonify({
+                'success': False,
+                'error': f'Failed to verify account: {str(e)}'
+            }), 400
+        
+        # Save credentials as shared
+        if save_shared_credentials(creds_dict):
+            return jsonify({
+                'success': True,
+                'message': f'Shared account setup successful for {channel_name}',
+                'account_info': {
+                    'channel_name': channel_name,
+                    'setup_timestamp': datetime.now().isoformat()
+                }
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to save shared credentials'
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Error setting up shared account: {str(e)}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': f'Setup failed: {str(e)}'
+        }), 500
+
+@app.route('/api/oauth2/shared-account-status')
+def shared_account_status():
+    """Check if shared account is configured"""
+    try:
+        shared_creds = load_shared_credentials()
+        
+        if not shared_creds:
+            return jsonify({
+                'success': True,
+                'has_shared_account': False,
+                'message': 'No shared account configured'
+            })
+        
+        # Try to verify the shared account is still valid
+        try:
+            creds = google.oauth2.credentials.Credentials(**shared_creds)
+            youtube = build('youtube', 'v3', credentials=creds)
+            request_info = youtube.channels().list(
+                part='snippet',
+                mine=True
+            )
+            response = request_info.execute()
+            
+            if response.get('items'):
+                channel_name = response['items'][0]['snippet']['title']
+                return jsonify({
+                    'success': True,
+                    'has_shared_account': True,
+                    'account_info': {
+                        'channel_name': channel_name,
+                        'is_valid': True
+                    }
+                })
+        except Exception as e:
+            logger.warning(f"Shared account credentials may be expired: {str(e)}")
+            return jsonify({
+                'success': True,
+                'has_shared_account': True,
+                'account_info': {
+                    'is_valid': False,
+                    'needs_refresh': True,
+                    'error': 'Credentials may need refreshing'
+                }
+            })
+    
+    except Exception as e:
+        logger.error(f"Error checking shared account status: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'Status check failed: {str(e)}'
+        }), 500
 
 @app.route('/api/analyze', methods=['POST'])
 def analyze_media():

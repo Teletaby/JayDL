@@ -18,6 +18,12 @@ import json
 from urllib.parse import urlencode
 import secrets
 from functools import wraps
+import re
+import werkzeug
+import werkzeug.http
+
+
+
 
 # Load environment variables
 load_dotenv()
@@ -36,10 +42,15 @@ app.config.from_pyfile('config.py', silent=True)
 app.secret_key = os.getenv('FLASK_SECRET_KEY', secrets.token_hex(32))
 app.config['SESSION_TYPE'] = 'filesystem'
 app.config['SESSION_PERMANENT'] = False
-app.config['SESSION_USE_SIGNER'] = False  # Don't sign session (avoid bytes/str mismatch)
-app.config['SESSION_COOKIE_SECURE'] = False  # False for localhost, True in production
+app.config['SESSION_USE_SIGNER'] = True  # Sign the session cookie for security
 app.config['SESSION_COOKIE_HTTPONLY'] = True
-app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'  # Use Lax for same-site requests
+# Configure session cookie settings based on environment
+if os.getenv('FLASK_ENV') == 'production' or 'onrender' in os.getenv('RENDER_EXTERNAL_URL', ''):
+    app.config['SESSION_COOKIE_SECURE'] = True
+    app.config['SESSION_COOKIE_SAMESITE'] = 'None'  # Required for cross-domain popups
+else:
+    app.config['SESSION_COOKIE_SECURE'] = False
+    app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['SESSION_COOKIE_NAME'] = 'jaydl_session'
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=1)
 app.config['SESSION_COOKIE_PATH'] = '/'
@@ -87,6 +98,31 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 # Maps a temporary key -> credentials dict (expires after 30 seconds)
 oauth_credentials_cache = {}
 oauth_credentials_lock = threading.Lock()
+
+# In-memory temporary state cache for OAuth flow
+oauth_state_cache = {}
+oauth_state_lock = threading.Lock()
+
+def store_oauth_state(state):
+    """Store OAuth state temporarily."""
+    with oauth_state_lock:
+        oauth_state_cache[state] = time.time()
+    logger.info(f"Stored state {state[:8]}... in server-side cache.")
+
+def is_valid_oauth_state(state):
+    """Validate OAuth state from server-side cache and remove if valid."""
+    with oauth_state_lock:
+        if state in oauth_state_cache:
+            timestamp = oauth_state_cache.pop(state)
+            # Check if expired (10 minutes)
+            if time.time() - timestamp < 600:
+                logger.info(f"State {state[:8]}... found in cache and is valid.")
+                return True
+            else:
+                logger.warning(f"State {state[:8]}... found in cache but was expired.")
+        else:
+            logger.warning(f"State {state[:8]}... not found in server-side cache.")
+    return False
 
 def store_oauth_credentials(creds_dict):
     """Store credentials temporarily and return a cache key"""
@@ -1245,6 +1281,11 @@ def authorize():
         session['flow_state'] = state
         
         logger.info(f"Stored OAuth state in session: {state}")
+        try:
+            logger.info(f"Session ID before auth: {session.sid}")
+        except Exception as e:
+            logger.warning(f"Could not get session.sid before auth: {e}")
+        logger.info(f"Session keys before auth: {list(session.keys())}")
         
         # Return the URL and state for frontend to use
         response = jsonify({
@@ -1266,7 +1307,20 @@ def authorize():
 @app.route('/api/oauth2callback')
 def oauth2callback():
     """OAuth2 callback endpoint"""
+    # Determine frontend URL for redirect based on environment
+    if os.getenv('FLASK_ENV') == 'production' or 'onrender' in os.getenv('RENDER_EXTERNAL_URL', ''):
+        frontend_url = "https://jaydl.onrender.com"
+    else:
+        frontend_url = "http://localhost:8000"
+
     try:
+        logger.info(f"Session contents in callback: {session}")
+        try:
+            logger.info(f"Session ID in callback: {session.sid}")
+        except Exception as e:
+            logger.warning(f"Could not get session.sid in callback: {e}")
+        logger.info(f"Session state in callback: {session.get('oauth_state')}")
+        logger.info(f"Request cookies in callback: {request.cookies}")
         # Get the state and code from the request query parameters
         request_state = request.args.get('state')
         request_code = request.args.get('code')
@@ -1275,22 +1329,22 @@ def oauth2callback():
         if request.args.get('error'):
             error = request.args.get('error')
             logger.error(f"OAuth error from Google: {error}")
-            return redirect(f"http://localhost:8000/#oauth_error={error}")
+            return redirect(f"{frontend_url}/#oauth_error={error}")
         
         if not request_code:
             logger.error(f"No authorization code received")
-            return redirect(f"http://localhost:8000/#oauth_error=no_code")
+            return redirect(f"{frontend_url}/#oauth_error=no_code")
         
         if not request_state:
             logger.error(f"No state received from Google")
-            return redirect(f"http://localhost:8000/#oauth_error=no_state")
+            return redirect(f"{frontend_url}/#oauth_error=no_state")
         
         session_state = session.get('oauth_state')
 
         # Verify state to prevent CSRF attacks
         if not session_state or session_state != request_state:
             logger.error(f"Invalid state. Request: '{request_state}', Session: '{session_state}'")
-            return redirect(f"http://localhost:8000/#oauth_error=invalid_state")
+            return redirect(f"{frontend_url}/#oauth_error=invalid_state")
         
         logger.info(f"State validation passed: {request_state}")
         session.pop('oauth_state', None)
@@ -1338,12 +1392,6 @@ def oauth2callback():
         logger.info(f"User authenticated successfully via OAuth, credentials stored in session and cache")
         logger.info(f"Session credentials: token={bool(creds_dict['token'])}, refresh_token={bool(creds_dict['refresh_token'])}")
         
-        # Determine frontend URL for redirect
-        if os.getenv('FLASK_ENV') == 'production' or 'onrender' in os.getenv('RENDER_EXTERNAL_URL', ''):
-            frontend_url = "https://jaydl.onrender.com"
-        else:
-            frontend_url = "http://localhost:8000"
-        
         # Redirect back to frontend with cache key in query parameter
         response = redirect(f"{frontend_url}/#auth_success&cache_key={cache_key}")
         # Clear the oauth state from session
@@ -1353,11 +1401,7 @@ def oauth2callback():
     
     except Exception as e:
         logger.error(f"OAuth callback error: {str(e)}", exc_info=True)
-        return redirect(f"http://localhost:8000/#oauth_error={str(e)}")
-    
-    except Exception as e:
-        logger.error(f"OAuth callback error: {str(e)}", exc_info=True)
-        return redirect(f"https://jaydl.onrender.com/#oauth_error={str(e)}")
+        return redirect(f"{frontend_url}/#oauth_error={str(e)}")
 
 @app.route('/api/oauth2status')
 def oauth_status():

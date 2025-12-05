@@ -34,6 +34,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+logger.info(f"RENDER_EXTERNAL_URL at startup: {os.getenv('RENDER_EXTERNAL_URL')}")
 
 app = Flask(__name__)
 app.config.from_pyfile('config.py', silent=True)
@@ -45,7 +46,7 @@ app.config['SESSION_PERMANENT'] = False
 app.config['SESSION_USE_SIGNER'] = True  # Sign the session cookie for security
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 # Configure session cookie settings based on environment
-if os.getenv('FLASK_ENV') == 'production' or 'onrender' in os.getenv('RENDER_EXTERNAL_URL', ''):
+if os.getenv('RENDER') == 'true':
     app.config['SESSION_COOKIE_SECURE'] = True
     app.config['SESSION_COOKIE_SAMESITE'] = 'None'  # Required for cross-domain popups
 else:
@@ -73,9 +74,8 @@ Session(app)
 GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID')
 GOOGLE_CLIENT_SECRET = os.getenv('GOOGLE_CLIENT_SECRET')
 
-# Set redirect URI based on environment
-if os.getenv('FLASK_ENV') == 'production' or 'onrender' in os.getenv('RENDER_EXTERNAL_URL', ''):
-    GOOGLE_REDIRECT_URI = os.getenv('GOOGLE_REDIRECT_URI', 'https://jaydl-backend.onrender.com/api/oauth2callback')
+if os.getenv('RENDER') == 'true':
+    GOOGLE_REDIRECT_URI = 'https://jaydl-backend.onrender.com/api/oauth2callback'
 else:
     GOOGLE_REDIRECT_URI = os.getenv('GOOGLE_REDIRECT_URI', 'http://localhost:5000/api/oauth2callback')
 
@@ -111,7 +111,9 @@ def store_oauth_state(state):
 
 def is_valid_oauth_state(state):
     """Validate OAuth state from server-side cache and remove if valid."""
+    logger.info(f"Validating state {state[:8]}... against cache.")
     with oauth_state_lock:
+        logger.info(f"Current cache keys: {list(oauth_state_cache.keys())}")
         if state in oauth_state_cache:
             timestamp = oauth_state_cache.pop(state)
             # Check if expired (10 minutes)
@@ -1276,16 +1278,8 @@ def authorize():
         
         logger.info(f"Generated authorization URL for OAuth, state: {state}")
 
-        # Store state in session
-        session['oauth_state'] = state
-        session['flow_state'] = state
-        
-        logger.info(f"Stored OAuth state in session: {state}")
-        try:
-            logger.info(f"Session ID before auth: {session.sid}")
-        except Exception as e:
-            logger.warning(f"Could not get session.sid before auth: {e}")
-        logger.info(f"Session keys before auth: {list(session.keys())}")
+        # Store state in server-side cache
+        store_oauth_state(state)
         
         # Return the URL and state for frontend to use
         response = jsonify({
@@ -1307,19 +1301,13 @@ def authorize():
 @app.route('/api/oauth2callback')
 def oauth2callback():
     """OAuth2 callback endpoint"""
-    # Determine frontend URL for redirect based on environment
-    if os.getenv('FLASK_ENV') == 'production' or 'onrender' in os.getenv('RENDER_EXTERNAL_URL', ''):
+    if os.getenv('RENDER') == 'true':
         frontend_url = "https://jaydl.onrender.com"
     else:
         frontend_url = "http://localhost:8000"
 
     try:
-        logger.info(f"Session contents in callback: {session}")
-        try:
-            logger.info(f"Session ID in callback: {session.sid}")
-        except Exception as e:
-            logger.warning(f"Could not get session.sid in callback: {e}")
-        logger.info(f"Session state in callback: {session.get('oauth_state')}")
+        logger.info(f"Callback received. Request state: {request.args.get('state')}")
         logger.info(f"Request cookies in callback: {request.cookies}")
         # Get the state and code from the request query parameters
         request_state = request.args.get('state')
@@ -1339,11 +1327,9 @@ def oauth2callback():
             logger.error(f"No state received from Google")
             return redirect(f"{frontend_url}/#oauth_error=no_state")
         
-        session_state = session.get('oauth_state')
-
         # Verify state to prevent CSRF attacks
-        if not session_state or session_state != request_state:
-            logger.error(f"Invalid state. Request: '{request_state}', Session: '{session_state}'")
+        if not is_valid_oauth_state(request_state):
+            logger.error(f"Invalid OAuth state received: '{request_state}'")
             return redirect(f"{frontend_url}/#oauth_error=invalid_state")
         
         logger.info(f"State validation passed: {request_state}")
@@ -1394,9 +1380,7 @@ def oauth2callback():
         
         # Redirect back to frontend with cache key in query parameter
         response = redirect(f"{frontend_url}/#auth_success&cache_key={cache_key}")
-        # Clear the oauth state from session
-        session.pop('oauth_state', None)
-        session.pop('flow_state', None)
+
         return response
     
     except Exception as e:

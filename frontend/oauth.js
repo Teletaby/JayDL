@@ -1,109 +1,32 @@
-// oauth.js — Start Google OAuth flow and manage authentication
+// oauth.js — Start Google OAuth flow (same-window redirect) and manage authentication
 (function() {
     function getBackendUrl() {
         const protocol = window.location.protocol;
         const hostname = window.location.hostname;
         const port = window.location.port;
         if (hostname === 'localhost' || hostname === '127.0.0.1') {
-            return `${protocol}//${hostname}:5000`;
+            return `${protocol}//${hostname}:5000`; // Local dev backend
         }
         if (hostname.includes('onrender.com')) {
-            return 'https://jaydl-backend.onrender.com';
+            return 'https://jaydl-backend.onrender.com'; // Deployed backend
         }
-        return `${protocol}//${hostname}${port ? ':' + port : ''}`;
+        // Fallback for other environments
+        return `${protocol}//${hostname}${port ? ':' + port : ''}`; 
     }
 
     const API_BASE = getBackendUrl();
 
-    // Runs IN THE POPUP after redirect from Google/backend.
-    // Its job is to find the cache_key and pass it to the main window.
-    function handlePopupRedirect() {
-        const hash = window.location.hash;
-
-        // Success case: pass the state to the parent
-        if (hash.includes('auth_success') && hash.includes('state=')) {
-            const stateMatch = hash.match(/state=([a-zA-Z0-9_-]+)/);
-            if (stateMatch) {
-                const state = stateMatch[1];
-                if (window.opener && window.opener.handleAuthCallback) {
-                    window.opener.handleAuthCallback(state, null);
-                    window.close();
-                    return;
-                }
-            }
-        }
-
-        // Error case: pass the error to the parent
-        if (hash.includes('oauth_error')) {
-            const errorMatch = hash.match(/oauth_error=([^&]+)/);
-            if (errorMatch) {
-                const error = errorMatch[1];
-                if (window.opener && window.opener.handleAuthCallback) {
-                    window.opener.handleAuthCallback(null, error);
-                    window.close();
-                    return;
-                }
-            }
-        }
-    }
-
-    // This function lives in the MAIN WINDOW and is called by the popup.
-    window.handleAuthCallback = function(state, error) {
-        if (error) {
-            let errorMessage = '❌ YouTube authentication failed';
-            switch (error) {
-                case 'access_denied':
-                    errorMessage = '❌ Access denied. Please grant permission to access YouTube.';
-                    break;
-                case 'invalid_state':
-                    errorMessage = '❌ Invalid authentication state. The server may have restarted. Please try again.';
-                    break;
-                case 'state_used':
-                    errorMessage = '❌ Authentication link already used. Please try again.';
-                    break;
-                case 'callback_failed':
-                    errorMessage = '❌ Authentication callback failed. Please try again.';
-                    break;
-                default:
-                    errorMessage = `❌ Authentication error: ${error}`;
-            }
-            alert(errorMessage);
-            return;
-        }
-
-        if (state) {
-            const storedState = sessionStorage.getItem('oauth_state');
-            sessionStorage.removeItem('oauth_state'); // Clean up state
-
-            if (!storedState || storedState !== state) {
-                alert('❌ Invalid authentication state (CSRF check failed). Please try again.');
-                return;
-            }
-
-            // Use the state to retrieve credentials
-            fetch(`${API_BASE}/api/oauth2/retrieve-cached-credentials/${state}`, {
-                    credentials: 'include'
-                })
-                .then(res => res.json())
-                .then(data => {
-                    if (data.success) {
-                        console.log('Main window session authenticated.');
-                        // Now that the main window is authenticated, run the final completion logic.
-                        window.authenticationComplete();
-                    } else {
-                        alert('❌ Failed to complete authentication: ' + (data.error || 'Unknown error'));
-                    }
-                })
-                .catch(err => {
-                    console.error('Error retrieving cached credentials:', err);
-                    alert('❌ Error completing authentication: ' + err.message);
-                });
-        }
+    // This function starts the OAuth flow from the main window.
+    window.startGoogleOAuth = function() {
+        // Redirect the current page to the backend authorization endpoint.
+        // The backend will handle the redirect to Google.
+        console.log('Starting Google OAuth flow...');
+        window.location.href = `${API_BASE}/api/oauth2authorize`;
     };
 
     // This is the final step, called only AFTER the main window has been authenticated.
     window.authenticationComplete = async function() {
-        console.log('Authentication complete called from popup');
+        console.log('Authentication complete. Checking for shared account setup.');
 
         const shouldSave = confirm(
             '✅ Authentication successful!\n\n' +
@@ -139,49 +62,41 @@
         }
     };
 
-    // This function starts the flow from the main window.
-    window.startGoogleOAuth = async function() {
-        try {
-            const resp = await fetch(`${API_BASE}/api/oauth2authorize`, {
-                method: 'GET'
-            });
-            
-            if (!resp.ok) {
-                const text = await resp.text();
-                alert('Failed to start OAuth: ' + text);
-                return;
-            }
+    // This function is called on page load to handle the redirect back from OAuth.
+    function handleOAuthRedirect() {
+        const urlParams = new URLSearchParams(window.location.search);
+        const authStatus = urlParams.get('auth_status');
+        const error = urlParams.get('error');
 
-            const data = await resp.json();
-            if (!data.success || !data.auth_url || !data.state) {
-                alert('OAuth start failed: ' + (data.error || 'Invalid response'));
-                return;
-            }
-
-            const authUrl = data.auth_url;
-            const state = data.state;
-            
-            // Store state in sessionStorage
-            sessionStorage.setItem('oauth_state', state);
-            
-            // Open popup with the URL (state is already in the URL from Google)
-            const popupName = 'jaydl_google_oauth_' + Date.now();
-            const popup = window.open(authUrl, popupName, 'width=900,height=700,scrollbars=yes,resizable=yes');
-            
-            if (!popup) {
-                alert('Popup blocked. Please allow popups and try again.');
-            }
-
-        } catch (err) {
-            console.error('startGoogleOAuth error:', err);
-            alert('Error starting OAuth: ' + err.message);
+        if (!authStatus) {
+            return; // Not an OAuth redirect.
         }
-    };
 
-    // If this script is running in a popup, execute the redirect handler.
-    // Otherwise, this code does nothing and just sets up the global functions for the main window.
-    if (window.opener) {
-        handlePopupRedirect();
+        // Clean the URL to remove the auth parameters.
+        const cleanUrl = window.location.protocol + "//" + window.location.host + window.location.pathname;
+        window.history.replaceState({}, document.title, cleanUrl);
+
+        if (authStatus === 'success') {
+            console.log('Main window session authenticated via redirect.');
+            // Now that the main window is authenticated, run the final completion logic.
+            window.authenticationComplete();
+        } else if (authStatus === 'failed') {
+            let errorMessage = '❌ YouTube authentication failed';
+            switch (error) {
+                case 'access_denied':
+                    errorMessage = '❌ Access denied. Please grant permission to access YouTube.';
+                    break;
+                case 'invalid_state':
+                    errorMessage = '❌ Invalid authentication state (CSRF). Please try again.';
+                    break;
+                case 'callback_failed':
+                    errorMessage = '❌ Authentication callback failed. Please try again.';
+                    break;
+                default:
+                    errorMessage = `❌ Authentication error: ${error || 'Unknown error'}`;
+            }
+            alert(errorMessage);
+        }
     }
 
     // Expose revoke function
@@ -189,17 +104,18 @@
         try {
             const resp = await fetch(`${API_BASE}/api/oauth2logout`, {
                 method: 'POST',
+                credentials: 'include',
                 headers: {
                     'Content-Type': 'application/json'
                 }
             });
-
             const data = await resp.json();
             if (data.success) {
                 localStorage.removeItem('yt_authenticated');
                 const btn = document.getElementById('ytAuthBtn');
                 if (btn) btn.classList.remove('authenticated');
                 alert('✅ YouTube authentication revoked successfully.');
+                window.location.reload(); // Reload to reflect logged-out state
             } else {
                 alert('❌ Failed to revoke authentication: ' + (data.error || 'Unknown error'));
             }
@@ -208,4 +124,7 @@
             alert('Error revoking OAuth: ' + err.message);
         }
     };
+
+    // Run the redirect handler on page load.
+    document.addEventListener('DOMContentLoaded', handleOAuthRedirect);
 })();

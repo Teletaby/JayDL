@@ -18,11 +18,6 @@ import json
 from urllib.parse import urlencode
 import secrets
 from functools import wraps
-import re
-import werkzeug
-import werkzeug.http
-
-
 
 
 # Load environment variables
@@ -93,32 +88,6 @@ SCOPES = [
 # Initialize downloader
 DOWNLOAD_DIR = os.getenv('DOWNLOAD_DIR', os.path.join(os.path.dirname(__file__), 'downloads'))
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-
-# In-memory temporary credentials cache for OAuth popup flow
-# Maps a temporary key -> credentials dict (expires after 30 seconds)
-oauth_credentials_cache = {}
-oauth_credentials_lock = threading.Lock()
-
-
-
-def store_oauth_credentials(creds_dict, cache_key):
-    """Store credentials temporarily with a specific key"""
-    with oauth_credentials_lock:
-        oauth_credentials_cache[cache_key] = {
-            'credentials': creds_dict,
-            'timestamp': time.time()
-        }
-    return cache_key
-
-def retrieve_oauth_credentials(cache_key):
-    """Retrieve credentials from cache and remove them"""
-    with oauth_credentials_lock:
-        if cache_key in oauth_credentials_cache:
-            data = oauth_credentials_cache.pop(cache_key)
-            # Check if expired (30 seconds)
-            if time.time() - data['timestamp'] < 30:
-                return data['credentials']
-    return None
 
 # Shared account credentials storage
 SHARED_CREDENTIALS_FILE = os.path.join(DOWNLOAD_DIR, '.shared_credentials.json')
@@ -221,7 +190,27 @@ class InvidiousDownloader:
     def ensure_directories(self):
         os.makedirs(self.base_dir, exist_ok=True)
     
-    def get_video_info(self, url):
+    def _get_yt_dlp_base_cmd(self, user_credentials=None, platform='generic'):
+        """Constructs the base command for yt-dlp, handling authentication."""
+        cmd = ['yt-dlp', '--no-warnings']
+        
+        # Priority 1: Use OAuth token for YouTube if available
+        if platform == 'youtube' and user_credentials and user_credentials.token:
+            logger.info("Using OAuth token for YouTube request.")
+            cmd.extend(['--add-header', f"Authorization: Bearer {user_credentials.token}"])
+            return cmd
+
+        # Priority 2: Use browser cookies for local dev (if not on Render)
+        if os.getenv('RENDER') != 'true':
+            logger.info("Using browser cookies for local development as fallback.")
+            cmd.extend(['--cookies-from-browser', 'chrome'])
+            return cmd
+
+        # Priority 3: Unauthenticated request (on Render without token, or if local chrome fails)
+        logger.info("Making unauthenticated request.")
+        return cmd
+    
+    def get_video_info(self, url, user_credentials=None):
         """Get video information using Invidious API for YouTube, yt-dlp for others"""
         try:
             # Detect platform
@@ -246,7 +235,7 @@ class InvidiousDownloader:
                         if response.status_code == 200:
                             data = response.json()
                             logger.info(f"Successfully got data from {instance}")
-                            return self._parse_invidious_response(data, video_id)
+                            return self._parse_invidious_response(data, video_id, user_credentials=user_credentials)
                         else:
                             logger.warning(f"{instance} returned {response.status_code}")
                             
@@ -259,18 +248,18 @@ class InvidiousDownloader:
                 
                 # All instances failed, use fallback
                 logger.warning("All Invidious instances failed, using fallback info")
-                return self._get_fallback_info(video_id)
+                return self._get_fallback_info(video_id, user_credentials=user_credentials)
             
             # For other platforms (TikTok, Instagram, Twitter, Spotify), use yt-dlp
             else:
                 logger.info(f"Analyzing {platform} URL: {url}")
-                return self._get_generic_platform_info(url, platform)
+                return self._get_generic_platform_info(url, platform, user_credentials=user_credentials)
             
         except Exception as e:
             logger.error(f"Error getting video info: {str(e)}")
             return {'success': False, 'error': f'Failed to get video info: {str(e)}'}
     
-    def _get_generic_platform_info(self, url, platform):
+    def _get_generic_platform_info(self, url, platform, user_credentials=None):
         """Get video info from yt-dlp for non-YouTube platforms, or RapidAPI for Spotify"""
         try:
             import subprocess
@@ -282,8 +271,8 @@ class InvidiousDownloader:
             
             # For other platforms, use yt-dlp
             # Try without cookies first, as they may not be available
-            cmd = ['yt-dlp', '--dump-json', '--no-warnings', url]
-            
+            base_cmd = self._get_yt_dlp_base_cmd(user_credentials, platform)
+            cmd = base_cmd + ['--dump-json', url]
             logger.info(f"Getting {platform} info with command: {' '.join(cmd)}")
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
             
@@ -335,7 +324,7 @@ class InvidiousDownloader:
             logger.info(f"Thumbnail URL: {thumbnail[:100] if thumbnail else 'None'}")
             
             # Get available formats
-            formats = self._get_available_formats(url)
+            formats = self._get_available_formats(url, user_credentials=user_credentials)
             
             return {
                 'success': True,
@@ -440,7 +429,7 @@ class InvidiousDownloader:
             logger.error(f"Error getting Spotify info: {e}", exc_info=True)
             return {'success': False, 'error': f'Failed to analyze Spotify URL: {str(e)}'}
     
-    def _parse_invidious_response(self, data, video_id):
+    def _parse_invidious_response(self, data, video_id, user_credentials=None):
         """Parse Invidious API response"""
         try:
             title = data.get('title', f'Video {video_id[:8]}...')
@@ -454,7 +443,7 @@ class InvidiousDownloader:
             logger.info(f"Got video info: {title} by {uploader}")
             
             # Get actual available formats from yt-dlp
-            formats = self._get_available_formats(f'https://www.youtube.com/watch?v={video_id}')
+            formats = self._get_available_formats(f'https://www.youtube.com/watch?v={video_id}', user_credentials=user_credentials)
             
             return {
                 'success': True,
@@ -469,16 +458,16 @@ class InvidiousDownloader:
             }
         except Exception as e:
             logger.error(f"Error parsing Invidious response: {e}")
-            return self._get_fallback_info(video_id)
+            return self._get_fallback_info(video_id, user_credentials=user_credentials)
     
-    def _get_fallback_info(self, video_id):
+    def _get_fallback_info(self, video_id, user_credentials=None):
         """Return basic info when API fails - try to get title from yt-dlp"""
         try:
             import subprocess
             import json
             
-            # Try to get video info from yt-dlp with longer timeout
-            cmd = ['yt-dlp', '--dump-json', '--no-warnings', '--cookies-from-browser', 'chrome', f'https://www.youtube.com/watch?v={video_id}']
+            base_cmd = self._get_yt_dlp_base_cmd(user_credentials, platform='youtube')
+            cmd = base_cmd + ['--dump-json', f'https://www.youtube.com/watch?v={video_id}']
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)  # Increased from 10 to 30 seconds
             
             title = f'Video {video_id[:8]}...'
@@ -505,7 +494,7 @@ class InvidiousDownloader:
             uploader = 'Unknown'
         
         # Get actual available formats from yt-dlp
-        formats = self._get_available_formats(f'https://www.youtube.com/watch?v={video_id}')
+        formats = self._get_available_formats(f'https://www.youtube.com/watch?v={video_id}', user_credentials=user_credentials)
         
         return {
             'success': True,
@@ -621,14 +610,14 @@ class InvidiousDownloader:
             }
         ]
     
-    def _get_available_formats(self, url):
+    def _get_available_formats(self, url, user_credentials=None):
         """Get actual available formats from yt-dlp"""
         try:
             import subprocess
             import json
             
-            # Get format information from yt-dlp with cookies
-            cmd = ['yt-dlp', '--dump-json', '--no-warnings', '--cookies-from-browser', 'chrome', url]
+            base_cmd = self._get_yt_dlp_base_cmd(user_credentials, platform=self.detect_platform(url))
+            cmd = base_cmd + ['--dump-json', url]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
             
             if result.returncode != 0:
@@ -816,28 +805,26 @@ class InvidiousDownloader:
             if platform == 'spotify':
                 return self._download_spotify(url, quality, media_type)
             
-            # For all platforms, always try browser cookies first
-            return self._download_with_browser_cookies(url, quality, media_type, platform)
+            # For all other platforms, use yt-dlp
+            return self._download_with_yt_dlp(url, quality, media_type, platform, user_credentials)
             
         except Exception as e:
             logger.error(f"Download error: {str(e)}", exc_info=True)
             return {'success': False, 'error': f'Download failed: {str(e)}'}
     
-    def _download_with_browser_cookies(self, url, quality, media_type, platform):
-        """Download using browser cookies (main solution)"""
+    def _download_with_yt_dlp(self, url, quality, media_type, platform, user_credentials=None):
+        """Download using yt-dlp, leveraging OAuth or browser cookies for authentication."""
         try:
             import subprocess
             import json
             
-            logger.info(f"Downloading with browser cookies (platform={platform}, quality={quality}, type={media_type})")
+            logger.info(f"Downloading with yt-dlp (platform={platform}, quality={quality}, type={media_type})")
             
-            # Build yt-dlp command with browser cookies
+            base_cmd = self._get_yt_dlp_base_cmd(user_credentials, platform)
+            
             if media_type == 'audio':
                 output_template = os.path.join(self.base_dir, f'%(title)s__audio.%(ext)s')
-                cmd = [
-                    'yt-dlp',
-                    '--no-warnings',
-                    '--cookies-from-browser', 'chrome',  # This is the key - uses browser cookies
+                cmd = base_cmd + [
                     '-f', 'bestaudio',
                     '-x',
                     '--audio-format', 'mp3',
@@ -866,10 +853,7 @@ class InvidiousDownloader:
                 
                 if quality in ['bestaudio', '192', '128']:
                     output_template = os.path.join(self.base_dir, f'%(title)s__{quality}.%(ext)s')
-                    cmd = [
-                        'yt-dlp',
-                        '--no-warnings',
-                        '--cookies-from-browser', 'chrome',
+                    cmd = base_cmd + [
                         '-f', 'bestaudio',
                         '-x',
                         '--audio-format', 'mp3',
@@ -879,10 +863,7 @@ class InvidiousDownloader:
                     ]
                 else:
                     output_template = os.path.join(self.base_dir, f'%(title)s__{quality}.%(ext)s')
-                    cmd = [
-                        'yt-dlp',
-                        '--no-warnings',
-                        '--cookies-from-browser', 'chrome',
+                    cmd = base_cmd + [
                         '-f', format_spec,
                         '-o', output_template,
                         url
@@ -894,7 +875,7 @@ class InvidiousDownloader:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
             
             if result.returncode == 0:
-                return self._process_download_result(result, url, platform=platform, 
+                return self._process_download_result(result, url, platform=platform, user_credentials=user_credentials,
                                                     media_type=media_type, quality=quality)
             else:
                 error_msg = result.stderr[:500] if result.stderr else 'Unknown error'
@@ -924,18 +905,15 @@ class InvidiousDownloader:
             logger.error(f"Download error: {str(e)}", exc_info=True)
             return {'success': False, 'error': f'Download failed: {str(e)}'}
     
-    def _process_download_result(self, result, url, platform, media_type, quality):
+    def _process_download_result(self, result, url, platform, media_type, quality, user_credentials=None):
         """Process successful download result"""
         try:
             import subprocess
             import json
             
-            # Get the title from yt-dlp info
-            info_cmd = [
-                'yt-dlp',
+            base_cmd = self._get_yt_dlp_base_cmd(user_credentials, platform)
+            info_cmd = base_cmd + [
                 '--dump-json',
-                '--no-warnings',
-                '--cookies-from-browser', 'chrome',
                 url
             ]
             info_result = subprocess.run(info_cmd, capture_output=True, text=True, timeout=30)
@@ -1227,8 +1205,11 @@ def index():
 
 @app.route('/api/oauth2authorize')
 def authorize():
-    """Start OAuth2 authorization flow"""
+    """Start OAuth2 authorization flow by redirecting user to Google."""
     try:
+        if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+            raise Exception("Google OAuth credentials are not configured on the server.")
+
         # Create flow instance
         flow = google_auth_oauthlib.flow.Flow.from_client_config(
             {
@@ -1250,56 +1231,46 @@ def authorize():
             prompt='consent'
         )
         
-        logger.info(f"Generated authorization URL for OAuth, state: {state}")
-
-        # Return the URL and state for frontend to use
-        response = jsonify({
-            'success': True,
-            'auth_url': authorization_url,
-            'state': state,
-            'message': 'Redirect user to this URL for authentication'
-        })
+        # Store state in session for CSRF protection
+        session['oauth_state'] = state
+        session.modified = True
         
-        return response
+        logger.info(f"Redirecting user to Google for OAuth. State: {state[:8]}...")
+        return redirect(authorization_url)
     
     except Exception as e:
         logger.error(f"Error generating auth URL: {str(e)}", exc_info=True)
-        return jsonify({
-            'success': False,
-            'error': f'Failed to start authentication: {str(e)}'
-        }), 500
+        frontend_url = "https://jaydl.onrender.com" if os.getenv('RENDER') == 'true' else "http://localhost:8000"
+        params = urlencode({'auth_status': 'failed', 'error': 'start_failed'})
+        return redirect(f"{frontend_url}/?{params}")
 
 @app.route('/api/oauth2callback')
 def oauth2callback():
-    """OAuth2 callback endpoint"""
-    if os.getenv('RENDER') == 'true':
-        frontend_url = "https://jaydl.onrender.com"
-    else:
-        frontend_url = "http://localhost:8000"
+    """OAuth2 callback endpoint for same-window redirect flow."""
+    frontend_url = "https://jaydl.onrender.com" if os.getenv('RENDER') == 'true' else "http://localhost:8000"
 
     try:
-        # Get the state from URL (not session)
+        # State validation for CSRF protection
         request_state = request.args.get('state')
-        request_code = request.args.get('code')
+        session_state = session.pop('oauth_state', None)
         
-        logger.info(f"Callback received, state: {request_state}")
+        if not session_state or request_state != session_state:
+            logger.error("OAuth state mismatch. CSRF check failed.")
+            params = urlencode({'auth_status': 'failed', 'error': 'invalid_state'})
+            return redirect(f"{frontend_url}/?{params}")
         
         # Check for authorization errors from Google
         if request.args.get('error'):
             error = request.args.get('error')
             logger.error(f"OAuth error from Google: {error}")
-            return redirect(f"{frontend_url}/#oauth_error={error}")
+            params = urlencode({'auth_status': 'failed', 'error': error})
+            return redirect(f"{frontend_url}/?{params}")
         
+        request_code = request.args.get('code')
         if not request_code:
             logger.error(f"No authorization code received")
-            return redirect(f"{frontend_url}/#oauth_error=no_code")
-        
-        if not request_state:
-            logger.error(f"No state received from Google")
-            return redirect(f"{frontend_url}/#oauth_error=no_state")
-        
-        # NOTE: We don't validate state against session anymore
-        # The state will be validated by the frontend
+            params = urlencode({'auth_status': 'failed', 'error': 'no_code'})
+            return redirect(f"{frontend_url}/?{params}")
         
         # Create a flow for token exchange
         flow = google_auth_oauthlib.flow.Flow.from_client_config(
@@ -1317,37 +1288,32 @@ def oauth2callback():
         flow.redirect_uri = GOOGLE_REDIRECT_URI
         
         # Exchange authorization code for credentials
-        authorization_response = request.url
-        logger.info(f"Exchanging authorization code for token")
+        logger.info("Exchanging authorization code for token")
         
-        flow.fetch_token(authorization_response=authorization_response)
+        flow.fetch_token(code=request_code)
         
-        # Get credentials
+        # Get credentials and store in session
         credentials = flow.credentials
-        
-        # Store credentials
         creds_dict = {
-            'token': str(credentials.token) if credentials.token else None,
-            'refresh_token': str(credentials.refresh_token) if credentials.refresh_token else None,
-            'token_uri': str(credentials.token_uri) if credentials.token_uri else None,
-            'client_id': str(credentials.client_id) if credentials.client_id else None,
-            'client_secret': str(credentials.client_secret) if credentials.client_secret else None,
-            'scopes': list(credentials.scopes) if credentials.scopes else []
+            'token': credentials.token,
+            'refresh_token': credentials.refresh_token,
+            'token_uri': credentials.token_uri,
+            'client_id': credentials.client_id,
+            'client_secret': credentials.client_secret,
+            'scopes': credentials.scopes
         }
+        session['credentials'] = creds_dict
+        session.modified = True
+        logger.info("User authenticated and credentials stored in session.")
         
-        # Store in cache with state as key
-        cache_key = request_state  # Use the state as cache key
-        store_oauth_credentials(creds_dict, cache_key)
-        
-        logger.info(f"User authenticated, stored with cache key: {cache_key}")
-        
-        # Redirect back to frontend with state
-        response = redirect(f"{frontend_url}/#auth_success&state={cache_key}")
-        return response
+        # Redirect back to frontend with success
+        params = urlencode({'auth_status': 'success'})
+        return redirect(f"{frontend_url}/?{params}")
     
     except Exception as e:
         logger.error(f"OAuth callback error: {str(e)}", exc_info=True)
-        return redirect(f"{frontend_url}/#oauth_error={str(e)}")
+        params = urlencode({'auth_status': 'failed', 'error': 'callback_failed'})
+        return redirect(f"{frontend_url}/?{params}")
 
 @app.route('/api/oauth2status')
 def oauth_status():
@@ -1389,35 +1355,7 @@ def oauth_status():
         'authenticated': False
     })
 
-@app.route('/api/oauth2/retrieve-cached-credentials/<cache_key>')
-def retrieve_cached_credentials(cache_key):
-    """Retrieve temporarily cached OAuth credentials (used for popup window flow)"""
-    try:
-        creds_dict = retrieve_oauth_credentials(cache_key)
-        if not creds_dict:
-            return jsonify({
-                'success': False,
-                'error': 'Cache key expired or not found'
-            }), 400
-        
-        # Store in session for this window
-        session['credentials'] = creds_dict
-        session.modified = True
-        
-        logger.info(f"Retrieved cached credentials for session from cache key {cache_key[:8]}...")
-        
-        return jsonify({
-            'success': True,
-            'message': 'Credentials retrieved and stored in session'
-        })
-    except Exception as e:
-        logger.error(f"Error retrieving cached credentials: {str(e)}", exc_info=True)
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
-
-@app.route('/api/oauth2logout')
+@app.route('/api/oauth2logout', methods=['POST'])
 def oauth_logout():
     """Log out (clear OAuth session)"""
     session.clear()
@@ -1566,8 +1504,10 @@ def analyze_media():
         if not url.startswith(('http://', 'https://')):
             return jsonify({'success': False, 'error': 'Invalid URL format'}), 400
         
+        user_credentials = get_user_credentials()
+        
         logger.info(f"Analyzing URL: {url}")
-        result = downloader.get_video_info(url)
+        result = downloader.get_video_info(url, user_credentials=user_credentials)
         
         if result['success']:
             logger.info(f"Successfully analyzed: {result['title']}")
@@ -1604,10 +1544,7 @@ def download_media():
         logger.info(f"Downloading: {url} | Quality: {quality} | Type: {media_type}")
         
         # Get user credentials if authenticated
-        user_credentials = None
-        if is_authenticated():
-            user_credentials = session['credentials']
-        
+        user_credentials = get_user_credentials()
         result = downloader.download_media(
             url, 
             quality=quality, 

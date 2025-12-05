@@ -1401,25 +1401,24 @@ def setup_shared_account():
         
         creds_dict = session['credentials']
         
-        # Verify this is the shared account by checking the channel name
+        # Verify the account is valid by getting user info
         try:
             creds = google.oauth2.credentials.Credentials(**creds_dict)
-            youtube = build('youtube', 'v3', credentials=creds)
-            request_info = youtube.channels().list(
-                part='snippet',
-                mine=True
-            )
-            response = request_info.execute()
             
-            if response.get('items'):
-                channel_email = response['items'][0]['snippet']['customUrl'] or 'Unknown'
-                channel_name = response['items'][0]['snippet']['title']
-                logger.info(f"Setting up shared account: {channel_name}")
+            # Use the more reliable userinfo endpoint, which works for any Google account
+            userinfo_service = build('oauth2', 'v2', credentials=creds)
+            user_info = userinfo_service.userinfo().get().execute()
+
+            if user_info and user_info.get('name'):
+                account_name = user_info.get('name')
+                logger.info(f"Setting up shared account for user: {account_name}")
             else:
+                logger.error("Could not get user info from token.")
                 return jsonify({
                     'success': False,
                     'error': 'Could not verify account information'
                 }), 400
+
         except Exception as e:
             logger.error(f"Error verifying account: {str(e)}")
             return jsonify({
@@ -1431,9 +1430,9 @@ def setup_shared_account():
         if save_shared_credentials(creds_dict):
             return jsonify({
                 'success': True,
-                'message': f'Shared account setup successful for {channel_name}',
+                'message': f'Shared account setup successful for {account_name}',
                 'account_info': {
-                    'channel_name': channel_name,
+                    'channel_name': account_name,
                     'setup_timestamp': datetime.now().isoformat()
                 }
             })

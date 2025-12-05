@@ -46,9 +46,11 @@ app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=1)
 # Set cookie settings based on environment
 if os.getenv('FLASK_ENV') == 'production' or 'onrender' in os.getenv('RENDER_EXTERNAL_URL', ''):
     app.config['SESSION_COOKIE_SECURE'] = True
+    app.config['SESSION_COOKIE_SAMESITE'] = 'None'
     app.config['SESSION_COOKIE_DOMAIN'] = '.onrender.com'
 else:
     app.config['SESSION_COOKIE_SECURE'] = False
+    app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
     app.config['SESSION_COOKIE_DOMAIN'] = None
 
 # Add CORS configuration

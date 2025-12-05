@@ -8,72 +8,6 @@
     <link rel="stylesheet" href="style.css">
     <script src="oauth.js"></script>
     <style>
-        /* Browser login hint styling */
-        .browser-login-hint {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 15px;
-            border-radius: 8px;
-            margin: 15px 0;
-            display: none;
-            animation: fadeIn 0.5s ease-in;
-        }
-        
-        .browser-login-hint.show {
-            display: block;
-        }
-        
-        .browser-login-hint-content {
-            display: flex;
-            align-items: center;
-            gap: 15px;
-        }
-        
-        .browser-login-icon {
-            font-size: 24px;
-            background: rgba(255, 255, 255, 0.2);
-            padding: 10px;
-            border-radius: 50%;
-        }
-        
-        .browser-login-text {
-            flex: 1;
-        }
-        
-        .browser-login-text h4 {
-            margin: 0 0 5px 0;
-            font-size: 16px;
-        }
-        
-        .browser-login-text p {
-            margin: 0;
-            font-size: 14px;
-            opacity: 0.9;
-        }
-        
-        .browser-login-actions {
-            display: flex;
-            gap: 10px;
-        }
-        
-        .btn-browser-help {
-            background: rgba(255, 255, 255, 0.2);
-            border: 1px solid rgba(255, 255, 255, 0.3);
-            color: white;
-            padding: 8px 16px;
-            border-radius: 5px;
-            cursor: pointer;
-            font-size: 14px;
-            display: flex;
-            align-items: center;
-            gap: 5px;
-            transition: all 0.3s ease;
-        }
-        
-        .btn-browser-help:hover {
-            background: rgba(255, 255, 255, 0.3);
-        }
-        
         @keyframes fadeIn {
             from { opacity: 0; transform: translateY(-10px); }
             to { opacity: 1; transform: translateY(0); }
@@ -146,6 +80,9 @@
                 <button class="navbar-chat-btn" id="chatBtn" title="Open Chatbot">
                     <i class="fas fa-comments"></i>
                 </button>
+                <button class="navbar-chat-btn" id="adminBtn" title="Admin Panel">
+                    <i class="fas fa-user-shield"></i>
+                </button>
             </div>
         </div>
         
@@ -165,30 +102,6 @@
 
     <div class="container">
         <main>
-            <!-- Browser Login Hint (shown for YouTube) -->
-            <div id="browserLoginHint" class="browser-login-hint">
-                <div class="browser-login-hint-content">
-                    <div class="browser-login-icon">
-                        <i class="fab fa-youtube"></i>
-                    </div>
-                    <div class="browser-login-text">
-                        <h4>YouTube Download Tip</h4>
-                        <p>For YouTube downloads to work, make sure you are signed into YouTube in your browser. The app uses your browser cookies to access YouTube content.</p>
-                    </div>
-                    <div class="browser-login-actions">
-                        <button class="btn-browser-help" id="ytAuthBtn" onclick="startGoogleOAuth()">
-                            <i class="fab fa-google"></i> Authenticate
-                        </button>
-                        <button class="btn-browser-help" onclick="showBrowserHelp()">
-                            <i class="fas fa-question-circle"></i> Help
-                        </button>
-                        <button class="btn-browser-help" onclick="hideBrowserHint()">
-                            <i class="fas fa-times"></i> Dismiss
-                        </button>
-                    </div>
-                </div>
-            </div>
-
             <div class="card input-section">
                 <div class="url-input-container">
                     <input type="text" id="urlInput" placeholder="Paste YouTube, TikTok, Instagram, Twitter, or Spotify URL here...">
@@ -278,6 +191,25 @@
         </div>
     </div>
 
+    <!-- Admin Panel Modal -->
+    <div id="adminPanelModal" class="modal hidden">
+        <div class="modal-content" style="max-width: 400px;">
+            <div class="chatbot-header"> <!-- Reusing style -->
+                <h2><i class="fas fa-user-shield"></i> Admin Panel</h2>
+                <button class="chatbot-close-btn" onclick="closeAdminPanel()">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div style="padding: 20px; text-align: center;">
+                <h4>Authentication</h4>
+                <p>Use this to authenticate with Google for YouTube access if you are having issues.</p>
+                <button class="btn btn-primary" style="margin-top: 15px;" id="adminAuthBtn" onclick="startGoogleOAuth()">
+                    <i class="fab fa-google"></i> Authenticate with Google
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- Browser Help Modal -->
     <div id="browserHelpModal" class="modal hidden">
         <div class="modal-content" style="max-width: 600px;">
@@ -346,7 +278,6 @@
         let currentMediaInfo = null;
         let selectedQuality = 'best';
         let selectedMediaType = 'video';
-        let isYouTubeUrl = false;
 
         function formatFileSize(bytes) {
             if (!bytes || bytes === 'Unknown' || bytes === 0) return 'Unknown';
@@ -364,7 +295,6 @@
         document.addEventListener('DOMContentLoaded', () => {
             loadPlatforms();
             setupEventListeners();
-            checkForYouTubeHint();
         });
 
         function setupEventListeners() {
@@ -372,7 +302,6 @@
             document.getElementById('analyzeBtn').addEventListener('click', analyzeMedia);
             document.getElementById('downloadBtn').addEventListener('click', downloadMedia);
             
-            document.getElementById('urlInput').addEventListener('input', checkForYouTubeHint);
             document.getElementById('urlInput').addEventListener('keypress', (e) => {
                 if (e.key === 'Enter') analyzeMedia();
             });
@@ -390,25 +319,15 @@
                     filterFormatOptions(format);
                 });
             });
-        }
 
-        function checkForYouTubeHint() {
-            const url = document.getElementById('urlInput').value.trim();
-            isYouTubeUrl = url.includes('youtube.com') || url.includes('youtu.be');
-            
-            if (isYouTubeUrl) {
-                showBrowserHint();
-            } else {
-                hideBrowserHint();
-            }
-        }
-
-        function showBrowserHint() {
-            document.getElementById('browserLoginHint').classList.add('show');
-        }
-
-        function hideBrowserHint() {
-            document.getElementById('browserLoginHint').classList.remove('show');
+            document.getElementById('adminBtn').addEventListener('click', () => {
+                const password = prompt('Enter admin password:');
+                if (password === 'smprime123') {
+                    openAdminPanel();
+                } else if (password !== null) { // if user didn't click cancel
+                    alert('Incorrect password.');
+                }
+            });
         }
 
         function showBrowserHelp() {
@@ -423,7 +342,6 @@
             try {
                 const text = await navigator.clipboard.readText();
                 document.getElementById('urlInput').value = text;
-                checkForYouTubeHint();
                 showSuccess('URL pasted from clipboard!');
             } catch (err) {
                 showError('Failed to paste from clipboard');
@@ -578,11 +496,6 @@
                 if (data.success) {
                     displayMediaInfo(data);
                     showSuccess('Media analyzed successfully!');
-                    
-                    // Show browser hint for YouTube
-                    if (data.platform === 'youtube') {
-                        showBrowserHint();
-                    }
                 } else {
                     showError(data.error || 'Failed to analyze media');
                 }
@@ -760,11 +673,6 @@
                     if (data.download_url) {
                         window.location.href = `${API_BASE}${data.download_url}`;
                         showSuccess('Download started! Check your downloads folder.');
-                        
-                        // Show browser hint if present
-                        if (data.browser_login_hint && isYouTubeUrl) {
-                            showBrowserHint();
-                        }
                     } else if (data.filename) {
                         // Construct download URL if not provided
                         const downloadUrl = `${API_BASE}/api/file/${data.filename}`;
@@ -790,7 +698,8 @@
                         showBrowserHelp();
                     } else {
                         showError(data.error || 'Download failed. Please try again.');
-                        
+                        const url = document.getElementById('urlInput').value.trim();
+                        const isYouTubeUrl = url.includes('youtube.com') || url.includes('youtu.be');
                         // Show browser help for YouTube errors
                         if (isYouTubeUrl && (data.error.includes('sign in') || data.error.includes('private') || data.error.includes('age restricted'))) {
                             showBrowserHelp();
@@ -904,6 +813,14 @@
 
         function closeChatbot() {
             document.getElementById('chatbotModal').classList.add('hidden');
+        }
+
+        function openAdminPanel() {
+            document.getElementById('adminPanelModal').classList.remove('hidden');
+        }
+
+        function closeAdminPanel() {
+            document.getElementById('adminPanelModal').classList.add('hidden');
         }
 
         // =============== COOKIE CONSENT ===============

@@ -18,6 +18,7 @@ from urllib.parse import urlencode
 import secrets
 import hashlib
 from functools import wraps
+import sys
 
 
 # Load environment variables
@@ -501,6 +502,8 @@ class InvidiousDownloader:
                     logger.info(f"Got info from yt-dlp: {title} by {uploader} ({duration})")
                 except Exception as e:
                     logger.warning(f"Error parsing yt-dlp data: {e}")
+            else:
+                logger.warning(f"yt-dlp fallback info failed for {video_id}. Stderr: {result.stderr[:500]}")
         except Exception as e:
             logger.error(f"Error getting fallback info: {e}")
             title = f'Video {video_id[:8]}...'
@@ -1210,6 +1213,7 @@ def index():
             'download': '/api/download (POST)',
             'platforms': '/api/platforms (GET)',
             'health': '/api/health (GET)',
+            'admin_login': '/api/admin/login (POST)',
             'oauth_authorize': '/api/oauth2authorize (GET)',
             'oauth_callback': '/api/oauth2callback (GET)',
             'oauth_status': '/api/oauth2status (GET)',
@@ -1524,9 +1528,6 @@ def analyze_media():
         
         if result['success']:
             logger.info(f"Successfully analyzed: {result['title']}")
-            # Add browser login hint for YouTube
-            if result['platform'] == 'youtube':
-                result['browser_login_hint'] = 'For best results, make sure you are signed into YouTube in your browser.'
         else:
             logger.error(f"Analysis failed: {result['error']}")
         
@@ -1570,18 +1571,8 @@ def download_media():
             # Ensure download_url is set
             if 'filename' in result and 'download_url' not in result:
                 result['download_url'] = f"/api/file/{result['filename']}"
-            
-            # Add browser login hint for YouTube
-            if 'youtube' in url.lower():
-                result['browser_login_hint'] = 'Tip: For YouTube downloads, make sure you are signed into YouTube in your browser.'
         else:
             logger.error(f"Download failed: {result.get('error', 'Unknown error')}")
-            
-            # Add browser login suggestion for YouTube errors
-            if 'youtube' in url.lower() and ('private' in result.get('error', '').lower() or 
-                                           'sign in' in result.get('error', '').lower() or
-                                           'age restricted' in result.get('error', '').lower()):
-                result['browser_login_hint'] = 'This YouTube video requires you to be signed into YouTube in your browser. Please open YouTube.com, sign in, then try again.'
         
         return jsonify(result)
     
@@ -1869,6 +1860,22 @@ def health_check():
         'session_active': is_authenticated()
     })
 
+@app.route('/api/admin/login', methods=['POST'])
+def admin_login():
+    """Validate admin password."""
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'error': 'No data received'}), 400
+
+    password = data.get('password')
+
+    # IMPORTANT: This is a hardcoded password as requested.
+    # In a real app, use a securely hashed password from environment variables.
+    if password == 'smprime123':
+        return jsonify({'success': True, 'message': 'Admin login successful'})
+    else:
+        return jsonify({'success': False, 'error': 'Invalid password'}), 401
+
 @app.route('/api/debug/oauth', methods=['GET'])
 def debug_oauth():
     """Debug OAuth configuration (development only)"""
@@ -1942,6 +1949,30 @@ def check_dependencies():
         logger.warning("Some OAuth dependencies may not be installed. Run: pip install google-auth-oauthlib google-auth-httplib2 google-api-python-client")
 
 check_dependencies()
+
+# Update yt-dlp on startup to get latest fixes
+def update_yt_dlp():
+    """Attempt to update yt-dlp to the latest version using pip."""
+    import subprocess
+    logger.info("Attempting to update yt-dlp...")
+    try:
+        # Using python -m pip to be sure about the environment
+        result = subprocess.run(
+            [sys.executable, '-m', 'pip', 'install', '--upgrade', 'yt-dlp'],
+            capture_output=True, text=True, timeout=60
+        )
+        if result.returncode == 0:
+            logger.info("yt-dlp update successful.")
+            # Log only first few lines of output to avoid clutter
+            logger.info('\n'.join(result.stdout.splitlines()[:5]))
+        else:
+            logger.error(f"Failed to update yt-dlp. Return code: {result.returncode}\n{result.stderr}")
+    except subprocess.TimeoutExpired:
+        logger.error("yt-dlp update command timed out.")
+    except Exception as e:
+        logger.error(f"An error occurred during yt-dlp update: {e}")
+
+update_yt_dlp()
 
 if __name__ == '__main__':
     # Get port from environment variable or default to 5000

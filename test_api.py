@@ -22,3 +22,22 @@ try:
         print(f'❌ Failed: {data.get("error")}')
 except Exception as e:
     print(f'Error: {str(e)}')
+
+print('\nTesting /api/oauth2/shared-account-status endpoint...')
+print('=' * 60)
+
+try:
+    url = 'http://localhost:5000/api/oauth2/shared-account-status'
+    response = requests.get(url, timeout=15)
+    print(f'Status: {response.status_code}')
+    data = response.json()
+    
+    if data.get('success'):
+        print('✅ SUCCESS!')
+        print(f'   Has Shared Account: {data.get("has_shared_account")}')
+        if data.get('has_shared_account'):
+            print(f'   Account Info: {data.get("account_info")}')
+    else:
+        print(f'❌ Failed: {data.get("error")}')
+except Exception as e:
+    print(f'Error: {str(e)}')

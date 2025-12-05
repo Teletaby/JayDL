@@ -6,6 +6,7 @@
     <title>JayDL - Download Videos & Music</title>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
+    <script src="oauth.js"></script>
     <style>
         /* Browser login hint styling */
         .browser-login-hint {
@@ -175,6 +176,9 @@
                         <p>For YouTube downloads to work, make sure you are signed into YouTube in your browser. The app uses your browser cookies to access YouTube content.</p>
                     </div>
                     <div class="browser-login-actions">
+                        <button class="btn-browser-help" id="ytAuthBtn" onclick="startGoogleOAuth()">
+                            <i class="fab fa-google"></i> Authenticate
+                        </button>
                         <button class="btn-browser-help" onclick="showBrowserHelp()">
                             <i class="fas fa-question-circle"></i> Help
                         </button>

@@ -36,8 +36,8 @@ app.config.from_pyfile('config.py', silent=True)
 app.secret_key = os.getenv('FLASK_SECRET_KEY', secrets.token_hex(32))
 app.config['SESSION_TYPE'] = 'filesystem'
 app.config['SESSION_PERMANENT'] = False
-app.config['SESSION_USE_SIGNER'] = True
-app.config['SESSION_COOKIE_SECURE'] = True  # Always True for HTTPS
+app.config['SESSION_USE_SIGNER'] = False  # Don't sign session (avoid bytes/str mismatch)
+app.config['SESSION_COOKIE_SECURE'] = False  # False for localhost, True in production
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'  # Use Lax for same-site requests
 app.config['SESSION_COOKIE_NAME'] = 'jaydl_session'
@@ -82,6 +82,31 @@ SCOPES = [
 # Initialize downloader
 DOWNLOAD_DIR = os.getenv('DOWNLOAD_DIR', os.path.join(os.path.dirname(__file__), 'downloads'))
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+# In-memory temporary credentials cache for OAuth popup flow
+# Maps a temporary key -> credentials dict (expires after 30 seconds)
+oauth_credentials_cache = {}
+oauth_credentials_lock = threading.Lock()
+
+def store_oauth_credentials(creds_dict):
+    """Store credentials temporarily and return a cache key"""
+    cache_key = secrets.token_hex(16)
+    with oauth_credentials_lock:
+        oauth_credentials_cache[cache_key] = {
+            'credentials': creds_dict,
+            'timestamp': time.time()
+        }
+    return cache_key
+
+def retrieve_oauth_credentials(cache_key):
+    """Retrieve credentials from cache and remove them"""
+    with oauth_credentials_lock:
+        if cache_key in oauth_credentials_cache:
+            data = oauth_credentials_cache.pop(cache_key)
+            # Check if expired (30 seconds)
+            if time.time() - data['timestamp'] < 30:
+                return data['credentials']
+    return None
 
 # Shared account credentials storage
 SHARED_CREDENTIALS_FILE = os.path.join(DOWNLOAD_DIR, '.shared_credentials.json')
@@ -1214,19 +1239,20 @@ def authorize():
         )
         
         logger.info(f"Generated authorization URL for OAuth, state: {state}")
+
+        # Store state in session
+        session['oauth_state'] = state
+        session['flow_state'] = state
+        
+        logger.info(f"Stored OAuth state in session: {state}")
         
         # Return the URL and state for frontend to use
-        # Frontend will pass state back to callback
         response = jsonify({
             'success': True,
             'auth_url': authorization_url,
             'state': state,
             'message': 'Redirect user to this URL for authentication'
         })
-        
-        # Set state in response cookie so it's available at callback
-        # Use SameSite=None to allow cross-site cookie (Google redirects back)
-        response.set_cookie('oauth_state', state, max_age=600, httponly=True, samesite='None', secure=True, path='/')
         
         return response
     
@@ -1241,20 +1267,35 @@ def authorize():
 def oauth2callback():
     """OAuth2 callback endpoint"""
     try:
-        # Get the state from the request query parameters and cookie
+        # Get the state and code from the request query parameters
         request_state = request.args.get('state')
-        cookie_state = request.cookies.get('oauth_state')
+        request_code = request.args.get('code')
         
-        if not request_state or not cookie_state:
-            logger.error(f"State mismatch: request_state={request_state}, cookie_state={cookie_state}")
+        # Check for authorization errors from Google
+        if request.args.get('error'):
+            error = request.args.get('error')
+            logger.error(f"OAuth error from Google: {error}")
+            return redirect(f"http://localhost:8000/#oauth_error={error}")
+        
+        if not request_code:
+            logger.error(f"No authorization code received")
+            return redirect(f"http://localhost:8000/#oauth_error=no_code")
+        
+        if not request_state:
+            logger.error(f"No state received from Google")
+            return redirect(f"http://localhost:8000/#oauth_error=no_state")
+        
+        session_state = session.get('oauth_state')
+
+        # Verify state to prevent CSRF attacks
+        if not session_state or session_state != request_state:
+            logger.error(f"Invalid state. Request: '{request_state}', Session: '{session_state}'")
             return redirect(f"http://localhost:8000/#oauth_error=invalid_state")
         
-        # Verify state matches
-        if str(request_state) != str(cookie_state):
-            logger.error(f"State mismatch: {request_state} != {cookie_state}")
-            return redirect(f"http://localhost:8000/#oauth_error=state_mismatch")
+        logger.info(f"State validation passed: {request_state}")
+        session.pop('oauth_state', None)
         
-        # Recreate the flow
+        # Create a flow for token exchange (without state parameter since we already validated it)
         flow = google_auth_oauthlib.flow.Flow.from_client_config(
             {
                 "web": {
@@ -1264,21 +1305,22 @@ def oauth2callback():
                     "token_uri": "https://oauth2.googleapis.com/token"
                 }
             },
-            scopes=SCOPES,
-            state=str(cookie_state)
+            scopes=SCOPES
         )
         
         flow.redirect_uri = GOOGLE_REDIRECT_URI
         
         # Exchange authorization code for credentials
         authorization_response = request.url
+        logger.info(f"Exchanging authorization code for token")
+        
         flow.fetch_token(authorization_response=authorization_response)
         
         # Get credentials
         credentials = flow.credentials
         
         # Store credentials in session as strings to avoid serialization issues
-        session['credentials'] = {
+        creds_dict = {
             'token': str(credentials.token) if credentials.token else None,
             'refresh_token': str(credentials.refresh_token) if credentials.refresh_token else None,
             'token_uri': str(credentials.token_uri) if credentials.token_uri else None,
@@ -1287,7 +1329,14 @@ def oauth2callback():
             'scopes': list(credentials.scopes) if credentials.scopes else []
         }
         
-        logger.info(f"User authenticated successfully via OAuth")
+        session['credentials'] = creds_dict
+        session.modified = True
+        
+        # Also store in global cache with a temporary key for parent window access
+        cache_key = store_oauth_credentials(creds_dict)
+        
+        logger.info(f"User authenticated successfully via OAuth, credentials stored in session and cache")
+        logger.info(f"Session credentials: token={bool(creds_dict['token'])}, refresh_token={bool(creds_dict['refresh_token'])}")
         
         # Determine frontend URL for redirect
         if os.getenv('FLASK_ENV') == 'production' or 'onrender' in os.getenv('RENDER_EXTERNAL_URL', ''):
@@ -1295,11 +1344,16 @@ def oauth2callback():
         else:
             frontend_url = "http://localhost:8000"
         
-        # Redirect back to frontend with success
-        response = redirect(f"{frontend_url}/#auth_success")
-        # Clear the oauth state cookie
-        response.delete_cookie('oauth_state')
+        # Redirect back to frontend with cache key in query parameter
+        response = redirect(f"{frontend_url}/#auth_success&cache_key={cache_key}")
+        # Clear the oauth state from session
+        session.pop('oauth_state', None)
+        session.pop('flow_state', None)
         return response
+    
+    except Exception as e:
+        logger.error(f"OAuth callback error: {str(e)}", exc_info=True)
+        return redirect(f"http://localhost:8000/#oauth_error={str(e)}")
     
     except Exception as e:
         logger.error(f"OAuth callback error: {str(e)}", exc_info=True)
@@ -1344,6 +1398,34 @@ def oauth_status():
         'success': True,
         'authenticated': False
     })
+
+@app.route('/api/oauth2/retrieve-cached-credentials/<cache_key>')
+def retrieve_cached_credentials(cache_key):
+    """Retrieve temporarily cached OAuth credentials (used for popup window flow)"""
+    try:
+        creds_dict = retrieve_oauth_credentials(cache_key)
+        if not creds_dict:
+            return jsonify({
+                'success': False,
+                'error': 'Cache key expired or not found'
+            }), 400
+        
+        # Store in session for this window
+        session['credentials'] = creds_dict
+        session.modified = True
+        
+        logger.info(f"Retrieved cached credentials for session from cache key {cache_key[:8]}...")
+        
+        return jsonify({
+            'success': True,
+            'message': 'Credentials retrieved and stored in session'
+        })
+    except Exception as e:
+        logger.error(f"Error retrieving cached credentials: {str(e)}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
 @app.route('/api/oauth2logout')
 def oauth_logout():

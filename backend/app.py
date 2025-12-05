@@ -1199,7 +1199,7 @@ def index():
             'oauth_authorize': '/api/oauth2authorize (GET)',
             'oauth_callback': '/api/oauth2callback (GET)',
             'oauth_status': '/api/oauth2status (GET)',
-            'oauth_logout': '/api/oauth2logout (GET)'
+            'oauth_logout': '/api/oauth2logout (POST)'
         }
     })
 

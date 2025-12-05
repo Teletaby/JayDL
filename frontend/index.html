@@ -275,7 +275,11 @@
     </div>
 
     <script>
-        const API_BASE = 'https://jaydl-backend.onrender.com';
+        // Dynamically set the backend URL based on the hostname
+        const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+        const API_BASE = isLocal ? 'http://localhost:5000' : 'https://jaydl-backend.onrender.com';
+        console.log('Backend URL:', API_BASE); // For debugging
+
         let currentMediaInfo = null;
         let selectedQuality = 'best';
         let selectedMediaType = 'video';

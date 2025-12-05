@@ -239,18 +239,25 @@ class InvidiousDownloader:
         if platform == 'youtube':
             logger.info("Using 'android' player client for YouTube to improve reliability.")
             cmd.extend(['--extractor-args', 'youtube:player_client=android'])
-
-        # Authentication logic
-        # Priority 1: Use OAuth token for YouTube if available
+        
+        # --- Authentication Logic ---
+        # This function is called in two contexts:
+        # 1. With user_credentials=None: This is an explicit request for an unauthenticated call.
+        # 2. With user_credentials=object: This is a request to use the best available authentication.
+        
+        # Priority 1: Use OAuth token if provided. This is the most reliable method.
         if platform == 'youtube' and user_credentials and user_credentials.token:
             logger.info("Using OAuth token for YouTube request.")
             cmd.extend(['--add-header', f"Authorization: Bearer {user_credentials.token}"])
-        # Priority 2: Use browser cookies for local dev (if not on Render)
-        elif os.getenv('RENDER') != 'true':
-            logger.info("Using browser cookies for local development as fallback.")
-            cmd.extend(['--cookies-from-browser', 'chrome'])
+        # Priority 2: If no OAuth, but on local dev, try browser cookies.
+        # This is only attempted if user_credentials were passed, indicating a "best effort" auth attempt.
+        elif user_credentials and os.getenv('RENDER') != 'true':
+            logger.info("Using browser cookies for local development as a fallback authentication method.")
+            # Try multiple browsers to be more robust
+            cmd.extend(['--cookies-from-browser', 'chrome,firefox,edge'])
+        # Priority 3: Unauthenticated request.
+        # This runs if user_credentials is None (explicitly unauthenticated) or if other methods don't apply.
         else:
-            # Priority 3: Unauthenticated request with rotating user-agent
             logger.info("Making unauthenticated request with rotated user-agent.")
             user_agents = [
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -273,27 +280,36 @@ class InvidiousDownloader:
                 if not video_id:
                     return {'success': False, 'error': 'Invalid YouTube URL'}
                 
-                # --- STRATEGY 1: Direct Invidious ID lookup (provides direct download links) ---
-                invidious_result = self.get_youtube_info_from_invidious(video_id, user_credentials)
-                if invidious_result and invidious_result.get('source') == 'invidious':
-                    logger.info("Success with Invidious direct links.")
+                # --- STRATEGY 1: RapidAPI YouTube Downloader (Primary, most reliable) ---
+                rapidapi_result = self._get_youtube_info_from_rapidapi(video_id, user_credentials=user_credentials)
+                if rapidapi_result:
+                    logger.info("Success with RapidAPI for YouTube.")
+                    return rapidapi_result
+
+                # --- STRATEGY 2: Public APIs (Invidious/Piped) without authentication ---
+                # These methods may use yt-dlp internally, but we pass `None` for credentials
+                # to ensure they run without OAuth first.
+                logger.warning("RapidAPI failed. Trying public APIs without authentication.")
+                invidious_result = self.get_youtube_info_from_invidious(video_id, user_credentials=None)
+                if invidious_result:
+                    logger.info("Success with Invidious (unauthenticated).")
                     return invidious_result
  
-                # --- STRATEGY 2: Piped API lookup (provides metadata, server-side download) ---
-                logger.warning("Invidious direct link method failed or didn't provide links. Trying Piped API.")
-                piped_result = self.get_youtube_info_from_piped(video_id, user_credentials)
+                piped_result = self.get_youtube_info_from_piped(video_id, user_credentials=None)
                 if piped_result:
-                    logger.info("Success with Piped for metadata.")
+                    logger.info("Success with Piped for metadata (unauthenticated).")
                     return piped_result
 
-                # --- STRATEGY 3: Invidious search-based fallback ---
-                logger.warning("Piped API failed. Trying Invidious search-based fallback.")
-                invidious_search_result = self._search_invidious_by_title(url, video_id, user_credentials)
+                # --- STRATEGY 3: Invidious search-based fallback (without authentication) ---
+                logger.warning("Public APIs failed. Trying Invidious search without authentication.")
+                invidious_search_result = self._search_invidious_by_title(url, video_id, user_credentials=None)
                 if invidious_search_result:
                     return invidious_search_result
  
-                # --- STRATEGY 4: Final fallback to yt-dlp ---
-                logger.warning("All Invidious/Piped methods failed, using yt-dlp as a final fallback.")
+                # --- STRATEGY 4: Final fallback to yt-dlp (with authentication if available) ---
+                # If all unauthenticated methods fail, this final attempt with yt-dlp WILL use
+                # the user's OAuth token if they are logged in.
+                logger.warning("All unauthenticated methods failed, using yt-dlp as a final fallback (with auth if available).")
                 return self._get_fallback_info(video_id, user_credentials=user_credentials)
  
             # For other platforms (TikTok, Instagram, Twitter, Spotify), use yt-dlp
@@ -302,7 +318,7 @@ class InvidiousDownloader:
                 return self._get_generic_platform_info(url, platform, user_credentials=user_credentials)
  
         except Exception as e:
-            logger.error(f"Error getting video info: {str(e)}")
+            logger.error(f"Error getting video info: {str(e)}", exc_info=True)
             return {'success': False, 'error': f'Failed to get video info: {str(e)}'}
 
     def get_youtube_info_from_invidious(self, video_id, user_credentials=None):
@@ -339,6 +355,155 @@ class InvidiousDownloader:
             except (requests.exceptions.RequestException, json.JSONDecodeError) as e:
                 logger.warning(f"Piped instance {instance} failed: {e}")
         return None
+
+    def _get_youtube_info_from_rapidapi(self, video_id, user_credentials=None):
+        """Get YouTube video info using the primary RapidAPI service."""
+        # Use a specific YouTube key, or fall back to the general RAPIDAPI_KEY
+        rapidapi_key = os.getenv('RAPIDAPI_YOUTUBE_KEY') or os.getenv('RAPIDAPI_KEY')
+        # The host for the cloud-api-hub-youtube-downloader API
+        rapidapi_host = os.getenv('RAPIDAPI_YOUTUBE_HOST', 'cloud-api-hub-youtube-downloader.p.rapidapi.com')
+
+        if not rapidapi_key:
+            logger.info("RapidAPI for YouTube not configured (RAPIDAPI_YOUTUBE_KEY or RAPIDAPI_KEY is required). Skipping.")
+            return None
+
+        logger.info(f"Trying RapidAPI YouTube downloader ({rapidapi_host}) for video ID: {video_id}")
+        
+        # This API uses the /info endpoint to get metadata and download links
+        api_url = f"https://{rapidapi_host}/info"
+        params = {"id": video_id}
+        headers = {
+            "x-rapidapi-key": rapidapi_key,
+            "x-rapidapi-host": rapidapi_host
+        }
+
+        try:
+            response = requests.get(api_url, headers=headers, params=params, timeout=25)
+
+            if response.status_code == 200:
+                data = response.json()
+                logger.info(f"Successfully got data from RapidAPI YouTube downloader.")
+                return self._parse_rapidapi_youtube_response(data, video_id, user_credentials=user_credentials)
+            else:
+                logger.warning(f"RapidAPI YouTube downloader failed with status {response.status_code}: {response.text[:200]}")
+                return None
+
+        except (requests.exceptions.RequestException, json.JSONDecodeError) as e:
+            logger.error(f"Error with RapidAPI YouTube downloader request: {e}")
+            return None
+
+    def _parse_rapidapi_youtube_response(self, response_data, video_id, user_credentials=None):
+        """
+        Parses the response from a RapidAPI YouTube service. It can handle
+        responses from `cloud-api-hub-youtube-downloader` (with `videoDetails`)
+        or yt-dlp based wrappers (flat structure).
+        """
+        try:
+            title = uploader = thumbnail = None
+            duration = 'Unknown'
+            view_count = 0
+            details = response_data.get('videoDetails')
+
+            # Handle `cloud-api-hub` style response
+            if details:
+                logger.info("Parsing RapidAPI response (videoDetails structure).")
+                title = details.get('title')
+                if details.get('lengthSeconds'):
+                    duration = self._format_duration(int(details.get('lengthSeconds', 0) or 0))
+                uploader = details.get('author')
+                view_count = int(details.get('viewCount', 0) or 0)
+                thumbnails = details.get('thumbnails')
+                if thumbnails and isinstance(thumbnails, list) and len(thumbnails) > 0:
+                    thumbnail = thumbnails[-1].get('url')
+
+            # Handle yt-dlp style flat response
+            elif 'title' in response_data:
+                logger.info("Parsing RapidAPI response (yt-dlp flat structure).")
+                title = response_data.get('title')
+                duration_sec = response_data.get('duration')
+                if duration_sec:
+                    duration = self._format_duration(int(duration_sec or 0))
+                uploader = response_data.get('uploader')
+                view_count = int(response_data.get('view_count', 0) or 0)
+                thumbnail = response_data.get('thumbnail')
+
+            # --- Validation and Fallbacks ---
+            if not title:
+                error_msg = response_data.get('error') or response_data.get('message') or 'API response did not contain videoDetails or title.'
+                logger.warning(f"RapidAPI YouTube downloader failed: {error_msg}")
+                logger.warning(f"Raw RapidAPI response that failed parsing: {json.dumps(response_data, indent=2)}")
+                return None
+
+            title = title or f'Video {video_id[:8]}...'
+            uploader = uploader or 'Unknown'
+            thumbnail = thumbnail or f'https://i.ytimg.com/vi/{video_id}/maxresdefault.jpg'
+
+            logger.info(f"Got video info from RapidAPI: {title} by {uploader}")
+
+            formats = []
+            source = 'yt-dlp' # Default if no links found
+
+            for fmt in response_data.get('formats', []):
+                if not fmt.get('url'):
+                    continue
+
+                # --- Style 1: cloud-api-hub style format (uses mimeType) ---
+                if 'mimeType' in fmt:
+                    mime_type_str = fmt.get('mimeType', 'video/mp4')
+                    parts = mime_type_str.split(';')[0].split('/')
+                    container = parts[1] if len(parts) > 1 else 'mp4'
+                    
+                    if fmt.get('hasVideo'): # Treat combined as video
+                        formats.append({
+                            'format_id': f"rapidapi_video_{fmt.get('qualityLabel')}",
+                            'resolution': fmt.get('qualityLabel'),
+                            'filesize': self.format_file_size(int(fmt.get('contentLength', 0) or 0)),
+                            'type': 'video',
+                            'container': container,
+                            'url': fmt.get('url')
+                        })
+                    elif fmt.get('hasAudio'):
+                        bitrate = fmt.get('audioBitrate')
+                        quality_label = f"{bitrate // 1000}kbps" if bitrate else "Audio"
+                        formats.append({
+                            'format_id': f"rapidapi_audio_{fmt.get('itag')}",
+                            'resolution': f"Audio ({quality_label})",
+                            'filesize': self.format_file_size(int(fmt.get('contentLength', 0) or 0)),
+                            'type': 'audio',
+                            'container': container,
+                            'url': fmt.get('url')
+                        })
+                
+                # --- Style 2: yt-dlp style format (uses vcodec/acodec, like the user provided) ---
+                elif 'vcodec' in fmt or 'acodec' in fmt:
+                    has_video = fmt.get('vcodec') != 'none' and fmt.get('vcodec') is not None
+                    has_audio = fmt.get('acodec') != 'none' and fmt.get('acodec') is not None
+                    container = fmt.get('ext', 'mp4')
+                    filesize = fmt.get('filesize') or fmt.get('filesize_approx') or 0
+                    format_id = fmt.get('format_id') or ('video' if has_video else 'audio')
+                    api_format_id = f"rapidapi_{format_id}"
+
+                    if has_video:
+                        quality_label = f"{fmt.get('height')}p" if fmt.get('height') else 'Video'
+                        formats.append({'format_id': api_format_id, 'resolution': quality_label, 'filesize': self.format_file_size(filesize), 'type': 'video', 'container': container, 'url': fmt.get('url')})
+                    elif has_audio and not has_video:
+                        abr = fmt.get('abr')
+                        quality_label = f"{int(abr)}kbps" if abr else "Audio"
+                        formats.append({'format_id': api_format_id, 'resolution': f"Audio ({quality_label})", 'filesize': self.format_file_size(filesize), 'type': 'audio', 'container': container, 'url': fmt.get('url')})
+
+            if formats:
+                logger.info(f"Successfully extracted {len(formats)} stream URLs from RapidAPI.")
+                source = 'rapidapi-youtube'
+            else:
+                # Fallback to yt-dlp for formats if RapidAPI didn't provide them in a usable way
+                logger.warning("RapidAPI did not provide stream URLs, falling back to yt-dlp for formats list.")
+                formats = self._get_available_formats(f'https://www.youtube.com/watch?v={video_id}', user_credentials=user_credentials)
+
+            return { 'success': True, 'title': title, 'duration': duration, 'thumbnail': thumbnail, 'uploader': uploader, 'view_count': view_count, 'formats': formats, 'platform': 'youtube', 'video_id': video_id, 'source': source }
+        except Exception as e:
+            logger.error(f"Error parsing RapidAPI YouTube response: {e}", exc_info=True)
+            logger.warning(f"Raw RapidAPI response data that failed parsing: {json.dumps(response_data, indent=2)}")
+            return None
 
     def _parse_piped_response(self, data, video_id, user_credentials=None):
         """Parse Piped API response. Piped provides separate streams, so downloads will be server-side."""
@@ -526,12 +691,12 @@ class InvidiousDownloader:
             import requests
             
             # Get RapidAPI credentials from environment
-            rapidapi_key = os.getenv('RAPIDAPI_KEY') or os.getenv('RAPIDAPI_SPOTIFY_KEY')
-            rapidapi_host = os.getenv('RAPIDAPI_HOST') or 'spotify-downloader9.p.rapidapi.com'
+            rapidapi_key = os.getenv('RAPIDAPI_SPOTIFY_KEY') or os.getenv('RAPIDAPI_KEY')
+            rapidapi_host = os.getenv('RAPIDAPI_SPOTIFY_HOST', 'spotify-downloader9.p.rapidapi.com')
             
             if not rapidapi_key:
-                logger.error("RAPIDAPI_KEY not configured for Spotify")
-                return {'success': False, 'error': 'Spotify not configured. Please set RAPIDAPI_KEY environment variable.'}
+                logger.error("RAPIDAPI_SPOTIFY_KEY or RAPIDAPI_KEY not configured for Spotify")
+                return {'success': False, 'error': 'Spotify not configured. Please set RAPIDAPI_SPOTIFY_KEY or RAPIDAPI_KEY in your environment.'}
             
             logger.info(f"Getting Spotify track info: {url}")
             
@@ -625,7 +790,7 @@ class InvidiousDownloader:
                     formats.append({
                         'format_id': f"invidious_{stream.get('qualityLabel')}",
                         'resolution': stream.get('qualityLabel'),
-                        'filesize': stream.get('size'),
+                        'filesize': self.format_file_size(stream.get('size')),
                         'type': 'video',
                         'container': stream.get('container'),
                         'url': stream.get('url') # Direct download URL
@@ -638,7 +803,7 @@ class InvidiousDownloader:
                         'format_id': f"invidious_audio_{stream.get('audioQuality')}",
                         'format': f"Audio ({stream.get('encoding')})",
                         'resolution': f"Audio ({stream.get('audioQuality')})",
-                        'filesize': stream.get('size'),
+                        'filesize': self.format_file_size(stream.get('size')),
                         'type': 'audio',
                         'container': stream.get('container'),
                         'url': stream.get('url') # Direct download URL
@@ -848,8 +1013,15 @@ class InvidiousDownloader:
             audio_available = False
             
             for fmt in formats_data:
+                has_video = fmt.get('vcodec') != 'none'
+                has_audio = fmt.get('acodec') != 'none'
+
+                # If any format has audio, we can offer audio extraction.
+                if has_audio:
+                    audio_available = True
+
                 # Check for video formats with height
-                if fmt.get('vcodec') != 'none' and fmt.get('height'):
+                if has_video and fmt.get('height'):
                     height = fmt.get('height')
                     container = fmt.get('ext', 'mp4').lower()  # Get container from ext field
                     filesize = fmt.get('filesize') or fmt.get('filesize_approx') or 0
@@ -861,9 +1033,8 @@ class InvidiousDownloader:
                     if container not in available_heights[height] or filesize > available_heights[height][container]:
                         available_heights[height][container] = filesize
                 
-                # Check for audio only formats
-                if fmt.get('acodec') != 'none' and fmt.get('vcodec') == 'none':
-                    audio_available = True
+                # Check for audio-only formats to get more accurate size estimates
+                if has_audio and not has_video:
                     format_id = fmt.get('format_id', 'audio')
                     filesize = fmt.get('filesize') or fmt.get('filesize_approx') or 0
                     audio_formats[format_id] = filesize
@@ -899,7 +1070,7 @@ class InvidiousDownloader:
                             'format_id': quality_id,
                             'resolution': resolution,
                             'height': height,
-                            'filesize': filesize if filesize > 0 else 'Unknown',
+                            'filesize': self.format_file_size(filesize) if filesize > 0 else 'Unknown',
                             'format': resolution,
                             'type': 'video',
                             'container': container,
@@ -918,7 +1089,7 @@ class InvidiousDownloader:
                         'format_id': container,  # Use container as format_id for best options
                         'resolution': f'{container.upper()} (Best)',
                         'height': 0,
-                        'filesize': best_filesize if best_filesize > 0 else 'Unknown',
+                        'filesize': self.format_file_size(best_filesize) if best_filesize > 0 else 'Unknown',
                         'format': f'{container.upper()} (Best)',
                         'type': 'video',
                         'container': container,
@@ -933,7 +1104,7 @@ class InvidiousDownloader:
                         'format_id': 'bestaudio',
                         'resolution': 'Best Audio',
                         'height': 0,
-                        'filesize': bestaudio_size if bestaudio_size > 0 else 'Unknown',
+                        'filesize': self.format_file_size(bestaudio_size) if bestaudio_size > 0 else 'Unknown',
                         'format': 'Best Audio',
                         'type': 'audio',
                         'url': ''
@@ -1002,12 +1173,9 @@ class InvidiousDownloader:
             logger.error(f"Error extracting video ID: {e}")
             return None
     
-    def download_media(self, url, quality='720', media_type='video', user_credentials=None):
+    def download_media(self, url, quality='720', media_type='video', user_credentials=None, direct_format_url=None):
         """Download media using OAuth for YouTube, yt-dlp for others"""
         try:
-            import subprocess
-            import json
-            
             # Ensure quality is a string
             quality = str(quality).strip()
             media_type = str(media_type).strip()
@@ -1016,26 +1184,47 @@ class InvidiousDownloader:
             platform = self.detect_platform(url)
             logger.info(f"Starting download: Platform={platform}, Quality={quality}, Type={media_type}")
             
+            # Handle API-provided formats first (e.g., from RapidAPI, Invidious)
+            if quality and ('invidious' in quality or 'rapidapi' in quality):
+                logger.info(f"Handling API-provided format for quality: {quality}")
+                # Re-analyze to get a fresh URL, as they are often time-sensitive
+                api_info = self.get_video_info(url, user_credentials=user_credentials)
+                if api_info and api_info.get('success'):
+                    selected_format = next((f for f in api_info.get('formats', []) if f.get('format_id') == quality), None)
+                    if selected_format and selected_format.get('url'):
+                        format_url = selected_format.get('url')
+                        # Manifest URLs (HLS/DASH) must be downloaded server-side by yt-dlp
+                        is_manifest = 'm3u8' in format_url or 'mpd' in format_url
+                        
+                        if not is_manifest:
+                            logger.info(f"✅ Found direct file URL from source '{api_info.get('source')}'. Sending to client.")
+                            return { 'success': True, 'download_url': format_url, 'source': 'direct' }
+                        else:
+                            # It's a manifest, so we must download it on the server.
+                            logger.info(f"API returned a manifest URL. Processing server-side with yt-dlp using this URL.")
+                            return self._download_with_yt_dlp(url, quality, media_type, platform, user_credentials, direct_format_url=format_url)
+                
+                logger.warning("API format handling failed on re-analysis, falling back to standard server-side download.")
+            
             # Handle Spotify downloads with RapidAPI
             if platform == 'spotify':
                 return self._download_spotify(url, quality, media_type)
             
             # For all other platforms, use yt-dlp
             return self._download_with_yt_dlp(url, quality, media_type, platform, user_credentials)
-            
         except Exception as e:
             logger.error(f"Download error: {str(e)}", exc_info=True)
             return {'success': False, 'error': f'Download failed: {str(e)}'}
     
-    def _download_with_yt_dlp(self, url, quality, media_type, platform, user_credentials=None):
+    def _download_with_yt_dlp(self, url, quality, media_type, platform, user_credentials=None, direct_format_url=None):
         """Download using yt-dlp, leveraging OAuth or browser cookies for authentication."""
         try:
             import subprocess
-            import json
             
             logger.info(f"Downloading with yt-dlp (platform={platform}, quality={quality}, type={media_type})")
             
             base_cmd = self._get_yt_dlp_base_cmd(user_credentials, platform)
+            download_url = direct_format_url or url
             
             if media_type == 'audio':
                 output_template = os.path.join(self.base_dir, f'%(title)s__audio.%(ext)s')
@@ -1045,10 +1234,20 @@ class InvidiousDownloader:
                     '--audio-format', 'mp3',
                     '--audio-quality', '192',
                     '-o', output_template,
-                    url
+                    download_url
                 ]
                 logger.info(f"Downloading audio from {platform}")
             else:
+                # If we have a direct format URL (like a manifest), we don't need complex quality mapping.
+                if direct_format_url:
+                    quality_suffix = quality.replace('rapidapi_', '').replace('invidious_', '').replace('video_', '')
+                    output_template = os.path.join(self.base_dir, f'%(title)s__{quality_suffix}.%(ext)s')
+                    cmd = base_cmd + [
+                        '-o', output_template,
+                        download_url
+                    ]
+                    logger.info(f"Downloading from manifest URL for quality: {quality}")
+                    
                 quality_map = {
                     '2160': 'bestvideo[height<=2160]+bestaudio/best[height<=2160]/best',
                     '1440': 'bestvideo[height<=1440]+bestaudio/best[height<=1440]/best',
@@ -1081,7 +1280,7 @@ class InvidiousDownloader:
                     cmd = base_cmd + [
                         '-f', format_spec,
                         '-o', output_template,
-                        url
+                        download_url
                     ]
                 
                 logger.info(f"Downloading video {quality} from {platform}")
@@ -1245,12 +1444,12 @@ class InvidiousDownloader:
                 }
             
             # Get RapidAPI credentials
-            rapidapi_key = os.getenv('RAPIDAPI_KEY')
-            rapidapi_host = os.getenv('RAPIDAPI_HOST', 'spotify-downloader9.p.rapidapi.com')
+            rapidapi_key = os.getenv('RAPIDAPI_SPOTIFY_KEY') or os.getenv('RAPIDAPI_KEY')
+            rapidapi_host = os.getenv('RAPIDAPI_SPOTIFY_HOST', 'spotify-downloader9.p.rapidapi.com')
             
             if not rapidapi_key:
-                logger.error("RAPIDAPI_KEY not configured for Spotify download")
-                return {'success': False, 'error': 'Spotify download not configured.'}
+                logger.error("RAPIDAPI_SPOTIFY_KEY or RAPIDAPI_KEY not configured for Spotify download")
+                return {'success': False, 'error': 'Spotify download not configured. Please set RAPIDAPI_SPOTIFY_KEY or RAPIDAPI_KEY.'}
             
             logger.info(f"Downloading Spotify track: {url}")
             
@@ -1755,33 +1954,32 @@ def download_media():
         if not url:
             return jsonify({'success': False, 'error': 'URL is required'}), 400
         
-        # Check for Invidious direct download
-        if quality and 'invidious' in quality:
-            logger.info(f"Attempting direct download via Invidious for quality: {quality}")
+        # Check for direct download from an API (Invidious, RapidAPI, etc.)
+        if quality and ('invidious' in quality or 'rapidapi' in quality):
+            logger.info(f"Attempting direct download via API for quality: {quality}")
             video_id = downloader._extract_video_id(url)
             if video_id:
-                # Re-analyze with Invidious to get fresh URLs
-                invidious_info = downloader.get_youtube_info_from_invidious(video_id)
-                if invidious_info and invidious_info.get('source') == 'invidious':
-                    selected_format = next((f for f in invidious_info.get('formats', []) if f.get('format_id') == quality), None)
+                # Re-analyze to get fresh URLs. This will try all API sources.
+                api_info = downloader.get_video_info(url, user_credentials=get_user_credentials())
+                
+                if api_info and api_info.get('success'):
+                    # Find the specific format that was requested
+                    selected_format = next((f for f in api_info.get('formats', []) if f.get('format_id') == quality), None)
+                    
                     if selected_format and selected_format.get('url'):
-                        logger.info("✅ Found direct Invidious URL. Sending to client.")
+                        logger.info(f"✅ Found direct API URL from source '{api_info.get('source')}'. Sending to client.")
                         return jsonify({
                             'success': True,
-                            'download_url': selected_format['url'] # This is an absolute URL
+                            'download_url': selected_format['url'], # This is an absolute URL
+                            'source': 'direct'
                         })
-            logger.warning("Invidious direct download failed, falling back to yt-dlp.")
+            logger.warning("Direct API download failed on re-analysis, falling back to server-side yt-dlp download.")
 
         logger.info(f"Downloading: {url} | Quality: {quality} | Type: {media_type}")
         
         # Get user credentials if authenticated
         user_credentials = get_user_credentials()
-        result = downloader.download_media(
-            url, 
-            quality=quality, 
-            media_type=media_type,
-            user_credentials=user_credentials
-        )
+        result = downloader.download_media(url, quality=quality, media_type=media_type, user_credentials=user_credentials)
         
         if result.get('success'):
             logger.info(f"Successfully downloaded: {result.get('title', 'Unknown')}")

@@ -20,13 +20,13 @@
     function handlePopupRedirect() {
         const hash = window.location.hash;
 
-        // Success case: pass the cache key to the parent
-        if (hash.includes('auth_success') && hash.includes('cache_key=')) {
-            const cacheKeyMatch = hash.match(/cache_key=([a-f0-9]+)/);
-            if (cacheKeyMatch) {
-                const cacheKey = cacheKeyMatch[1];
+        // Success case: pass the state to the parent
+        if (hash.includes('auth_success') && hash.includes('state=')) {
+            const stateMatch = hash.match(/state=([a-zA-Z0-9_-]+)/);
+            if (stateMatch) {
+                const state = stateMatch[1];
                 if (window.opener && window.opener.handleAuthCallback) {
-                    window.opener.handleAuthCallback(cacheKey, null);
+                    window.opener.handleAuthCallback(state, null);
                     window.close();
                     return;
                 }
@@ -48,7 +48,7 @@
     }
 
     // This function lives in the MAIN WINDOW and is called by the popup.
-    window.handleAuthCallback = function(cacheKey, error) {
+    window.handleAuthCallback = function(state, error) {
         if (error) {
             let errorMessage = '❌ YouTube authentication failed';
             switch (error) {
@@ -71,9 +71,17 @@
             return;
         }
 
-        if (cacheKey) {
-            // Use the cacheKey to authenticate THIS (the main) window's session
-            fetch(`${API_BASE}/api/oauth2/retrieve-cached-credentials/${cacheKey}`, {
+        if (state) {
+            const storedState = sessionStorage.getItem('oauth_state');
+            sessionStorage.removeItem('oauth_state'); // Clean up state
+
+            if (!storedState || storedState !== state) {
+                alert('❌ Invalid authentication state (CSRF check failed). Please try again.');
+                return;
+            }
+
+            // Use the state to retrieve credentials
+            fetch(`${API_BASE}/api/oauth2/retrieve-cached-credentials/${state}`, {
                     credentials: 'include'
                 })
                 .then(res => res.json())
@@ -137,6 +145,7 @@
             const resp = await fetch(`${API_BASE}/api/oauth2authorize`, {
                 method: 'GET'
             });
+            
             if (!resp.ok) {
                 const text = await resp.text();
                 alert('Failed to start OAuth: ' + text);
@@ -144,14 +153,21 @@
             }
 
             const data = await resp.json();
-            if (!data.success || !data.auth_url) {
-                alert('OAuth start failed: ' + (data.error || 'No auth_url returned'));
+            if (!data.success || !data.auth_url || !data.state) {
+                alert('OAuth start failed: ' + (data.error || 'Invalid response'));
                 return;
             }
 
             const authUrl = data.auth_url;
+            const state = data.state;
+            
+            // Store state in sessionStorage
+            sessionStorage.setItem('oauth_state', state);
+            
+            // Open popup with the URL (state is already in the URL from Google)
             const popupName = 'jaydl_google_oauth_' + Date.now();
             const popup = window.open(authUrl, popupName, 'width=900,height=700,scrollbars=yes,resizable=yes');
+            
             if (!popup) {
                 alert('Popup blocked. Please allow popups and try again.');
             }

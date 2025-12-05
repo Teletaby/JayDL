@@ -42,19 +42,19 @@ app.config.from_pyfile('config.py', silent=True)
 # Session configuration for OAuth
 app.secret_key = os.getenv('FLASK_SECRET_KEY', secrets.token_hex(32))
 app.config['SESSION_TYPE'] = 'filesystem'
-app.config['SESSION_PERMANENT'] = False
-app.config['SESSION_USE_SIGNER'] = True  # Sign the session cookie for security
+app.config['SESSION_PERMANENT'] = True
+app.config['SESSION_USE_SIGNER'] = True
 app.config['SESSION_COOKIE_HTTPONLY'] = True
-# Configure session cookie settings based on environment
-if os.getenv('RENDER') == 'true':
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'  # Keep as Lax
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=1)
+
+# Set cookie settings based on environment
+if os.getenv('FLASK_ENV') == 'production' or 'onrender' in os.getenv('RENDER_EXTERNAL_URL', ''):
     app.config['SESSION_COOKIE_SECURE'] = True
-    app.config['SESSION_COOKIE_SAMESITE'] = 'None'  # Required for cross-domain popups
+    app.config['SESSION_COOKIE_DOMAIN'] = '.onrender.com'
 else:
     app.config['SESSION_COOKIE_SECURE'] = False
-    app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
-app.config['SESSION_COOKIE_NAME'] = 'jaydl_session'
-app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=1)
-app.config['SESSION_COOKIE_PATH'] = '/'
+    app.config['SESSION_COOKIE_DOMAIN'] = None
 
 # Add CORS configuration
 CORS(app,
@@ -99,36 +99,10 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 oauth_credentials_cache = {}
 oauth_credentials_lock = threading.Lock()
 
-# In-memory temporary state cache for OAuth flow
-oauth_state_cache = {}
-oauth_state_lock = threading.Lock()
 
-def store_oauth_state(state):
-    """Store OAuth state temporarily."""
-    with oauth_state_lock:
-        oauth_state_cache[state] = time.time()
-    logger.info(f"Stored state {state[:8]}... in server-side cache.")
 
-def is_valid_oauth_state(state):
-    """Validate OAuth state from server-side cache and remove if valid."""
-    logger.info(f"Validating state {state[:8]}... against cache.")
-    with oauth_state_lock:
-        logger.info(f"Current cache keys: {list(oauth_state_cache.keys())}")
-        if state in oauth_state_cache:
-            timestamp = oauth_state_cache.pop(state)
-            # Check if expired (10 minutes)
-            if time.time() - timestamp < 600:
-                logger.info(f"State {state[:8]}... found in cache and is valid.")
-                return True
-            else:
-                logger.warning(f"State {state[:8]}... found in cache but was expired.")
-        else:
-            logger.warning(f"State {state[:8]}... not found in server-side cache.")
-    return False
-
-def store_oauth_credentials(creds_dict):
-    """Store credentials temporarily and return a cache key"""
-    cache_key = secrets.token_hex(16)
+def store_oauth_credentials(creds_dict, cache_key):
+    """Store credentials temporarily with a specific key"""
     with oauth_credentials_lock:
         oauth_credentials_cache[cache_key] = {
             'credentials': creds_dict,
@@ -1278,9 +1252,6 @@ def authorize():
         
         logger.info(f"Generated authorization URL for OAuth, state: {state}")
 
-        # Store state in server-side cache
-        store_oauth_state(state)
-        
         # Return the URL and state for frontend to use
         response = jsonify({
             'success': True,
@@ -1307,11 +1278,11 @@ def oauth2callback():
         frontend_url = "http://localhost:8000"
 
     try:
-        logger.info(f"Callback received. Request state: {request.args.get('state')}")
-        logger.info(f"Request cookies in callback: {request.cookies}")
-        # Get the state and code from the request query parameters
+        # Get the state from URL (not session)
         request_state = request.args.get('state')
         request_code = request.args.get('code')
+        
+        logger.info(f"Callback received, state: {request_state}")
         
         # Check for authorization errors from Google
         if request.args.get('error'):
@@ -1327,15 +1298,10 @@ def oauth2callback():
             logger.error(f"No state received from Google")
             return redirect(f"{frontend_url}/#oauth_error=no_state")
         
-        # Verify state to prevent CSRF attacks
-        if not is_valid_oauth_state(request_state):
-            logger.error(f"Invalid OAuth state received: '{request_state}'")
-            return redirect(f"{frontend_url}/#oauth_error=invalid_state")
+        # NOTE: We don't validate state against session anymore
+        # The state will be validated by the frontend
         
-        logger.info(f"State validation passed: {request_state}")
-        session.pop('oauth_state', None)
-        
-        # Create a flow for token exchange (without state parameter since we already validated it)
+        # Create a flow for token exchange
         flow = google_auth_oauthlib.flow.Flow.from_client_config(
             {
                 "web": {
@@ -1359,7 +1325,7 @@ def oauth2callback():
         # Get credentials
         credentials = flow.credentials
         
-        # Store credentials in session as strings to avoid serialization issues
+        # Store credentials
         creds_dict = {
             'token': str(credentials.token) if credentials.token else None,
             'refresh_token': str(credentials.refresh_token) if credentials.refresh_token else None,
@@ -1369,18 +1335,14 @@ def oauth2callback():
             'scopes': list(credentials.scopes) if credentials.scopes else []
         }
         
-        session['credentials'] = creds_dict
-        session.modified = True
+        # Store in cache with state as key
+        cache_key = request_state  # Use the state as cache key
+        store_oauth_credentials(creds_dict, cache_key)
         
-        # Also store in global cache with a temporary key for parent window access
-        cache_key = store_oauth_credentials(creds_dict)
+        logger.info(f"User authenticated, stored with cache key: {cache_key}")
         
-        logger.info(f"User authenticated successfully via OAuth, credentials stored in session and cache")
-        logger.info(f"Session credentials: token={bool(creds_dict['token'])}, refresh_token={bool(creds_dict['refresh_token'])}")
-        
-        # Redirect back to frontend with cache key in query parameter
-        response = redirect(f"{frontend_url}/#auth_success&cache_key={cache_key}")
-
+        # Redirect back to frontend with state
+        response = redirect(f"{frontend_url}/#auth_success&state={cache_key}")
         return response
     
     except Exception as e:

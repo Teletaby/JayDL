@@ -31,7 +31,6 @@ logger = logging.getLogger(__name__)
 logger.info(f"RENDER_EXTERNAL_URL at startup: {os.getenv('RENDER_EXTERNAL_URL')}")
 
 app = Flask(__name__)
-app.config.from_pyfile('config.py', silent=True)
 
 # Session configuration. Using Flask's default client-side, cookie-based sessions
 # is required for stateless platforms like Render.

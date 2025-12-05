@@ -40,7 +40,7 @@ app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=1)
 
 # Set cookie settings based on environment
-if os.getenv('FLASK_ENV') == 'production' or 'onrender' in os.getenv('RENDER_EXTERNAL_URL', ''):
+if os.getenv('RENDER') == 'true':
     app.config['SESSION_COOKIE_SECURE'] = True
     app.config['SESSION_COOKIE_SAMESITE'] = 'None'
     app.config['SESSION_COOKIE_DOMAIN'] = '.onrender.com'

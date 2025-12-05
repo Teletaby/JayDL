@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_file, redirect, session, url_for
+from flask import Flask, request, jsonify, send_file, redirect, session, url_for, after_this_request
 from flask_cors import CORS
 import os
 import logging
@@ -22,6 +22,7 @@ import random
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 import sys
+import re
 
 
 # Load environment variables
@@ -237,8 +238,12 @@ class InvidiousDownloader:
 
         # For YouTube, add extractor args to avoid blocking on servers
         if platform == 'youtube':
-            logger.info("Using 'android' player client for YouTube to improve reliability.")
-            cmd.extend(['--extractor-args', 'youtube:player_client=android'])
+            # Rotate player client to increase reliability against bot detection.
+            # 'android', 'ios', 'web', and 'tv' are valid options.
+            player_clients = ['android', 'ios', 'web']
+            selected_client = random.choice(player_clients)
+            logger.info(f"Using '{selected_client}' player client for YouTube to improve reliability.")
+            cmd.extend(['--extractor-args', f'youtube:player_client={selected_client}'])
         
         # --- Authentication Logic ---
         # This function is called in two contexts:
@@ -1217,15 +1222,37 @@ class InvidiousDownloader:
             return {'success': False, 'error': f'Download failed: {str(e)}'}
     
     def _download_with_yt_dlp(self, url, quality, media_type, platform, user_credentials=None, direct_format_url=None):
-        """Download using yt-dlp, leveraging OAuth or browser cookies for authentication."""
+        """Download using yt-dlp, routing unauthenticated YouTube through Invidious."""
+        import tempfile
+        import subprocess
+
+        filepath_info_file = None
         try:
-            import subprocess
-            
-            logger.info(f"Downloading with yt-dlp (platform={platform}, quality={quality}, type={media_type})")
-            
-            base_cmd = self._get_yt_dlp_base_cmd(user_credentials, platform)
             download_url = direct_format_url or url
+            effective_platform = platform
+
+            # If this is an unauthenticated YouTube download, route it through an Invidious instance
+            # to prevent blocks and format availability issues from YouTube on server IPs.
+            if platform == 'youtube' and not user_credentials and not direct_format_url:
+                video_id = self._extract_video_id(url)
+                if video_id:
+                    instance_url = "https://vid.puffyan.us" # A historically reliable instance
+                    invidious_url = f"{instance_url}/watch?v={video_id}"
+                    logger.info(f"Unauthenticated YouTube download. Routing through Invidious instance: {instance_url}")
+                    download_url = invidious_url
+                    # Use the generic extractor for Invidious URLs to prevent yt-dlp resolving it back to YouTube.
+                    effective_platform = 'generic'
+
+            # Create a temp file to store the final filename from yt-dlp
+            with tempfile.NamedTemporaryFile(mode='w', delete=False, encoding='utf-8', suffix='.txt') as tmp_file:
+                filepath_info_file = tmp_file.name
+
+            logger.info(f"Downloading with yt-dlp (platform={effective_platform}, quality={quality}, type={media_type})")
             
+            # Build command using the 'effective_platform' which may be 'generic' for Invidious routes
+            base_cmd = self._get_yt_dlp_base_cmd(user_credentials, effective_platform)
+            
+            cmd = []
             if media_type == 'audio':
                 output_template = os.path.join(self.base_dir, f'%(title)s__audio.%(ext)s')
                 cmd = base_cmd + [
@@ -1234,81 +1261,43 @@ class InvidiousDownloader:
                     '--audio-format', 'mp3',
                     '--audio-quality', '192',
                     '-o', output_template,
-                    download_url
                 ]
-                logger.info(f"Downloading audio from {platform}")
+                logger.info(f"Downloading audio from {effective_platform}")
             else:
-                # If we have a direct format URL (like a manifest), we don't need complex quality mapping.
-                if direct_format_url:
-                    quality_suffix = quality.replace('rapidapi_', '').replace('invidious_', '').replace('video_', '')
-                    output_template = os.path.join(self.base_dir, f'%(title)s__{quality_suffix}.%(ext)s')
-                    cmd = base_cmd + [
-                        '-o', output_template,
-                        download_url
-                    ]
-                    logger.info(f"Downloading from manifest URL for quality: {quality}")
-                    
                 quality_map = {
-                    '2160': 'bestvideo[height<=2160]+bestaudio/best[height<=2160]/best',
-                    '1440': 'bestvideo[height<=1440]+bestaudio/best[height<=1440]/best',
-                    '1080': 'bestvideo[height<=1080]+bestaudio/best[height<=1080]/best',
-                    '720': 'bestvideo[height<=720]+bestaudio/best[height<=720]/best',
-                    '480': 'bestvideo[height<=480]+bestaudio/best[height<=480]/best',
-                    '360': 'bestvideo[height<=360]+bestaudio/best[height<=360]/best',
+                    '2160': 'bv[height<=2160]+ba/b[height<=2160]/bv+ba/b',
+                    '1440': 'bv[height<=1440]+ba/b[height<=1440]/bv+ba/b',
+                    '1080': 'bv[height<=1080]+ba/b[height<=1080]/bv+ba/b',
+                    '720': 'bv[height<=720]+ba/b[height<=720]/bv+ba/b',
+                    '480': 'bv[height<=480]+ba/b[height<=480]/bv+ba/b',
+                    '360': 'bv[height<=360]+ba/b[height<=360]/bv+ba/b',
                     'mp4': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
                     'webm': 'bestvideo[ext=webm]+bestaudio[ext=webm]/best[ext=webm]/best',
                     'best': 'bestvideo+bestaudio/best',
-                    'bestaudio': 'bestaudio',
-                    '192': 'bestaudio',
-                    '128': 'bestaudio'
                 }
-                
                 format_spec = quality_map.get(quality, 'bestvideo+bestaudio/best')
                 
-                if quality in ['bestaudio', '192', '128']:
-                    output_template = os.path.join(self.base_dir, f'%(title)s__{quality}.%(ext)s')
-                    cmd = base_cmd + [
-                        '-f', 'bestaudio',
-                        '-x',
-                        '--audio-format', 'mp3',
-                        '--audio-quality', quality if quality in ['192', '128'] else '192',
-                        '-o', output_template,
-                        url
-                    ]
-                else:
-                    output_template = os.path.join(self.base_dir, f'%(title)s__{quality}.%(ext)s')
-                    cmd = base_cmd + [
-                        '-f', format_spec,
-                        '-o', output_template,
-                        download_url
-                    ]
-                
-                logger.info(f"Downloading video {quality} from {platform}")
+                output_template = os.path.join(self.base_dir, f'%(title)s__{quality}.%(ext)s')
+                cmd = base_cmd + [
+                    '-f', format_spec,
+                    '-o', output_template,
+                ]
+                logger.info(f"Downloading video {quality} from {effective_platform}")
             
+            # Add the --print-to-file argument to get the final path and the URL to download
+            cmd.extend(['--print-to-file', 'after_move:filepath', filepath_info_file])
+            cmd.append(download_url)
+
             logger.info(f"Running command: {' '.join(cmd)}")
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
             
             if result.returncode == 0:
-                return self._process_download_result(result, url, platform=platform, user_credentials=user_credentials,
-                                                    media_type=media_type, quality=quality)
+                return self._process_download_result(result, platform=platform,
+                                                    media_type=media_type, quality=quality,
+                                                    filepath_info_file=filepath_info_file)
             else:
                 error_msg = result.stderr[:500] if result.stderr else 'Unknown error'
                 logger.error(f"Download failed: {error_msg}")
-                
-                # Special handling for YouTube
-                if platform == 'youtube':
-                    if 'private' in error_msg.lower() or 'sign in' in error_msg.lower():
-                        return {
-                            'success': False,
-                            'error': 'This YouTube video requires authentication. Please make sure you are signed into YouTube in your browser.',
-                            'need_browser_login': True
-                        }
-                    elif 'age restricted' in error_msg.lower():
-                        return {
-                            'success': False,
-                            'error': 'This YouTube video is age-restricted. Please sign into YouTube in your browser to access it.',
-                            'need_browser_login': True
-                        }
                 
                 return {'success': False, 'error': f'Download failed: {error_msg}'}
                 
@@ -1318,111 +1307,65 @@ class InvidiousDownloader:
         except Exception as e:
             logger.error(f"Download error: {str(e)}", exc_info=True)
             return {'success': False, 'error': f'Download failed: {str(e)}'}
+        finally:
+            # Ensure the temp file is always cleaned up
+            if filepath_info_file and os.path.exists(filepath_info_file):
+                os.remove(filepath_info_file)
     
-    def _process_download_result(self, result, url, platform, media_type, quality, user_credentials=None):
-        """Process successful download result"""
+    def _process_download_result(self, result, platform, media_type, quality, filepath_info_file):
+        """Process successful download result by reading the path from the info file."""
         try:
-            import subprocess
-            import json
-            
-            base_cmd = self._get_yt_dlp_base_cmd(user_credentials, platform)
-            info_cmd = base_cmd + [
-                '--dump-json',
-                url
-            ]
-            info_result = subprocess.run(info_cmd, capture_output=True, text=True, timeout=30)
-            
-            filename = f'video_{platform}'
-            
-            if info_result.returncode == 0:
-                try:
-                    info_data = json.loads(info_result.stdout)
-                    filename = info_data.get('title', f'video_{platform}')
-                    logger.info(f"Got title from info: {filename}")
-                except Exception as parse_err:
-                    logger.warning(f"Error parsing info JSON: {parse_err}")
-            else:
-                logger.warning(f"Could not get info: {info_result.stderr}")
-            
-            # Determine expected file extensions
-            if media_type == 'audio' or quality in ['bestaudio', '192', '128']:
-                expected_extensions = ('.mp3', '.m4a', '.aac', '.opus', '.vorbis')
-                quality_suffix = '__audio' if quality == 'bestaudio' else f'__{quality}'
-            else:
-                expected_extensions = ('.mp4', '.mkv', '.webm', '.m4a')
-                quality_suffix = f'__{quality}'
-            
-            logger.info(f"Looking for file with suffix: {quality_suffix}")
-            
-            # Search for file with quality suffix in filename
             found_filepath = None
-            for root, dirs, files in os.walk(self.base_dir):
-                for file in files:
-                    if quality_suffix in file and file.endswith(expected_extensions):
-                        full_path = os.path.join(root, file)
-                        file_mtime = os.path.getmtime(full_path)
-                        current_time = time.time()
-                        if current_time - file_mtime < 300:
-                            found_filepath = full_path
-                            logger.info(f"Found matching file: {found_filepath}")
-                            break
-                if found_filepath:
-                    break
             
-            # If not found, search without quality suffix
-            if not found_filepath:
-                for root, dirs, files in os.walk(self.base_dir):
-                    for file in files:
-                        if filename.replace(' ', '').replace('_', '').lower() in file.replace(' ', '').replace('_', '').lower() and file.endswith(expected_extensions):
-                            full_path = os.path.join(root, file)
-                            file_mtime = os.path.getmtime(full_path)
-                            current_time = time.time()
-                            if current_time - file_mtime < 300:
-                                found_filepath = full_path
-                                logger.info(f"Found file by pattern: {found_filepath}")
-                                break
-                    if found_filepath:
-                        break
-            
-            # Last resort: look for any recently created file
-            if not found_filepath:
-                for root, dirs, files in os.walk(self.base_dir):
-                    for file in files:
-                        if file.endswith(expected_extensions):
-                            full_path = os.path.join(root, file)
-                            file_mtime = os.path.getmtime(full_path)
-                            current_time = time.time()
-                            if current_time - file_mtime < 60:
-                                found_filepath = full_path
-                                logger.info(f"Found recent file: {found_filepath}")
-                                break
-                    if found_filepath:
-                        break
-            
-            filepath = found_filepath if found_filepath else os.path.join(self.base_dir, f"{filename}{'.mp3' if media_type == 'audio' else '.mp4'}")
-            
-            if os.path.exists(filepath):
+            # Read the exact filename from the info file created by yt-dlp
+            if filepath_info_file and os.path.exists(filepath_info_file):
+                with open(filepath_info_file, 'r', encoding='utf-8') as f:
+                    # The file might contain multiple lines if yt-dlp is used on a playlist.
+                    # We want the last non-empty line, which corresponds to the last downloaded file.
+                    lines = f.read().strip().splitlines()
+                    if lines:
+                        last_path = lines[-1].strip()
+                        if os.path.exists(last_path):
+                            found_filepath = last_path
+                            logger.info(f"Found downloaded file path from info file: {found_filepath}")
+                        else:
+                            logger.error(f"File path '{last_path}' from info file does not exist.")
+            else:
+                logger.error("Could not find the filepath info file.")
+
+            if found_filepath:
+                filepath = found_filepath
+                # Get the title from the filename itself
+                base_filename = os.path.basename(filepath)
+                title_guess = os.path.splitext(base_filename)[0]
+                # Clean up suffix for a better title
+                title_guess = re.sub(r'__\w+$', '', title_guess).replace('_', ' ')
+                
                 file_size = os.path.getsize(filepath)
                 logger.info(f"File found: {filepath} ({file_size} bytes)")
                 
                 return {
                     'success': True,
-                    'title': filename,
-                    'filename': os.path.basename(filepath),
+                    'title': title_guess,
+                    'filename': base_filename,
                     'filepath': filepath,
                     'file_size': self.format_file_size(file_size),
-                    'download_url': f"/api/file/{os.path.basename(filepath)}",
+                    'download_url': f"/api/file/{base_filename}",
                     'platform': platform,
                     'media_type': media_type,
                     'quality': f'{quality}p' if media_type == 'video' else 'MP3'
                 }
             else:
-                logger.error(f"File not found at: {filepath}")
-                return {'success': True, 'message': 'Download completed', 'filename': 'video'}
+                # This is now a true failure case.
+                logger.error(f"Could not locate downloaded file. yt-dlp stdout:\n{result.stdout[-1000:]}")
+                return {
+                    'success': False,
+                    'error': 'Download process finished, but the final file could not be located on the server. This may be a temporary issue.'
+                }
                 
         except Exception as e:
-            logger.error(f"Error getting file info: {e}", exc_info=True)
-            return {'success': True, 'message': 'Download completed successfully', 'filename': 'video'}
+            logger.error(f"Error processing download result: {e}", exc_info=True)
+            return {'success': False, 'error': f'An unexpected error occurred while processing the downloaded file: {str(e)}'}
     
     def _download_spotify(self, url, quality='192', media_type='audio'):
         """Download Spotify track using RapidAPI"""
@@ -2000,7 +1943,7 @@ def download_media():
 
 @app.route('/api/file/<filename>', methods=['GET'])
 def serve_file(filename):
-    """Serve downloaded file"""
+    """Serve downloaded file and delete it afterwards."""
     try:
         filepath = os.path.join(DOWNLOAD_DIR, filename)
         
@@ -2010,6 +1953,15 @@ def serve_file(filename):
                 'error': 'File not found'
             }), 404
         
+        @after_this_request
+        def cleanup(response):
+            try:
+                logger.info(f"Cleaning up file: {filepath}")
+                os.remove(filepath)
+            except Exception as e:
+                logger.error(f"Error during file cleanup: {str(e)}")
+            return response
+
         logger.info(f"Serving file: {filename}")
         
         return send_file(

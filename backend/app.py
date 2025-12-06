@@ -210,22 +210,11 @@ class InvidiousDownloader:
         
         # Invidious instances (fallback list)
         self.invidious_instances = [
-            'https://inv.vern.cc',          # Fast, user recommended
-            'https://vid.puffyan.us',       # Reliable
-            'https://yt.artemislena.eu',    # Reliable
-            'https://yewtu.be',             # Reliable, user recommended
-            'https://inv.nadeko.net',       # User recommended
-            'https://invidious.nerdvpn.de', # User recommended
-            'https://invidious.projectsegfau.lt', # From official list
-            'https://iv.ggtyler.dev',       # From official list
-            'https://invidious.slipfox.xyz' # From official list
-        ]
-        self.piped_instances = [
-            'https://pipedapi.kavin.rocks',
-            'https://pipedapi.moomoo.me',
-            'https://pipedapi.smnz.de',
-            'https://pipedapi.adminforge.de',
-            'https://piped-api.lunar.icu'
+            'https://inv.nadeko.net',
+            'https://yewtu.be',
+            'https://invidious.f5.si',
+            'https://invidious.nerdvpn.de',
+            'https://inv.perditum.com'
         ]
         self.api_instance = os.getenv('INVIDIOUS_INSTANCE', self.invidious_instances[0])
     

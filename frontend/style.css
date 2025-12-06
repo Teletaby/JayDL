@@ -885,3 +885,94 @@ header p {
         min-width: 100%;
     }
 }
+
+/* ============ MAIN RESPONSIVE STYLES ============ */
+@media (max-width: 768px) {
+    body {
+        padding-top: 80px; /* Adjust for smaller navbar */
+    }
+
+    .container {
+        padding: 10px;
+    }
+
+    .card {
+        padding: 20px;
+    }
+
+    header h1 {
+        font-size: 2.2em;
+    }
+
+    .url-input-container {
+        flex-direction: column;
+    }
+
+    #urlInput {
+        font-size: 14px;
+        padding: 12px;
+    }
+    
+    .btn {
+        padding: 12px 20px;
+        font-size: 15px;
+    }
+
+    .media-preview {
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+    }
+
+    .thumbnail {
+        width: 100%;
+        max-width: 300px;
+        height: auto;
+    }
+    
+    .meta-info {
+        justify-content: center;
+        gap: 15px;
+    }
+
+    .options-grid {
+        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    }
+    
+    .option-btn {
+        padding: 12px;
+        min-height: 80px;
+        font-size: 14px;
+    }
+
+    .platforms-grid {
+        grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+    }
+    
+    .modal-content {
+        padding: 20px;
+    }
+
+    /* Adjust modal for browser help to be more readable */
+    #browserHelpModal .modal-content {
+        padding: 25px;
+    }
+    #browserHelpModal h2 {
+        font-size: 1.3em;
+    }
+    .help-step h4 {
+        font-size: 1em;
+    }
+    .help-tips h3 {
+        font-size: 1.1em;
+    }
+
+    .modal-actions {
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    .modal-actions .btn {
+        width: 100%;
+    }
+}

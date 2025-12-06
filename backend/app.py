@@ -1336,6 +1336,12 @@ class InvidiousDownloader:
 
             logger.info(f"Running command: {' '.join(cmd)}")
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+
+            # Check for explicit errors in stderr, even with exit code 0
+            if "ERROR:" in result.stderr:
+                error_msg = result.stderr.split('ERROR:')[1].strip()
+                logger.error(f"Download failed with error in stderr: {error_msg}")
+                return {'success': False, 'error': f'Download failed: {error_msg}'}
             
             if result.returncode == 0:
                 return self._process_download_result(result, platform=platform,
@@ -1389,6 +1395,17 @@ class InvidiousDownloader:
                 
                 file_size = os.path.getsize(filepath)
                 logger.info(f"File found: {filepath} ({file_size} bytes)")
+
+                # Add a size check to ensure it's not an empty/error file
+                if file_size < 10240: # 10 KB threshold
+                    logger.error(f"Download failed: File size ({file_size} bytes) is below the 10KB threshold. Assuming it's an error page.")
+                    # Clean up the invalid file
+                    try:
+                        os.remove(filepath)
+                        logger.info(f"Cleaned up invalid file: {filepath}")
+                    except Exception as e:
+                        logger.error(f"Failed to clean up invalid file: {e}")
+                    return {'success': False, 'error': 'Downloaded file is invalid (too small). This often indicates a block or an error page was saved instead of the media.'}
                 
                 return {
                     'success': True,

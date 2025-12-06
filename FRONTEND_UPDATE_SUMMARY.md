@@ -85,4 +85,16 @@ See `HOW_TO_AUTHENTICATE.md` for complete step-by-step guide with screenshots an
 
 ---
 
+## ✨ Downloader Resiliency
+
+**Before:**
+- Downloader was prone to errors like "Failed to extract any player response".
+
+**After:**
+- Downloader is more resilient to YouTube's anti-bot measures.
+- Rotates through more player clients (`web`, `mweb`, `ios`, `android`, `tv`).
+- Tries to use cookies from multiple browsers (Chrome, Firefox, Edge, etc.) as a fallback for authentication.
+
+---
+
 **Ready to use! Follow the steps in HOW_TO_AUTHENTICATE.md 🚀**

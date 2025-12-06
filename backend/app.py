@@ -232,36 +232,28 @@ class InvidiousDownloader:
     def ensure_directories(self):
         os.makedirs(self.base_dir, exist_ok=True)
     
-    def _get_yt_dlp_base_cmd(self, user_credentials=None, platform='generic'):
+    def _get_yt_dlp_base_cmd(self, user_credentials=None, platform='generic', browser_for_cookies=None):
         """Constructs the base command for yt-dlp, handling authentication."""
         cmd = ['yt-dlp', '--no-warnings', '--geo-bypass']
 
         # For YouTube, add extractor args to avoid blocking on servers
         if platform == 'youtube':
             # Rotate player client to increase reliability against bot detection.
-            # 'android', 'ios', 'web', and 'tv' are valid options.
-            player_clients = ['android', 'ios', 'web']
+            player_clients = ['android', 'ios', 'web', 'mweb', 'tv']
             selected_client = random.choice(player_clients)
             logger.info(f"Using '{selected_client}' player client for YouTube to improve reliability.")
             cmd.extend(['--extractor-args', f'youtube:player_client={selected_client}'])
         
         # --- Authentication Logic ---
-        # This function is called in two contexts:
-        # 1. With user_credentials=None: This is an explicit request for an unauthenticated call.
-        # 2. With user_credentials=object: This is a request to use the best available authentication.
-        
-        # Priority 1: Use OAuth token if provided. This is the most reliable method.
+        # Priority 1: Use OAuth token if provided.
         if platform == 'youtube' and user_credentials and user_credentials.token:
             logger.info("Using OAuth token for YouTube request.")
             cmd.extend(['--add-header', f"Authorization: Bearer {user_credentials.token}"])
-        # Priority 2: If no OAuth, but on local dev, try browser cookies.
-        # This is only attempted if user_credentials were passed, indicating a "best effort" auth attempt.
-        elif user_credentials and os.getenv('RENDER') != 'true':
-            logger.info("Using browser cookies for local development as a fallback authentication method.")
-            # Try multiple browsers to be more robust
-            cmd.extend(['--cookies-from-browser', 'chrome,firefox,edge'])
-        # Priority 3: Unauthenticated request.
-        # This runs if user_credentials is None (explicitly unauthenticated) or if other methods don't apply.
+        # Priority 2: Use browser cookies if specified.
+        elif browser_for_cookies and os.getenv('RENDER') != 'true':
+            logger.info(f"Attempting to use cookies from '{browser_for_cookies}' browser.")
+            cmd.extend(['--cookies-from-browser', browser_for_cookies])
+        # Priority 3: Unauthenticated request with rotated user-agent.
         else:
             logger.info("Making unauthenticated request with rotated user-agent.")
             user_agents = [
@@ -616,10 +608,12 @@ class InvidiousDownloader:
             
             # For other platforms, use yt-dlp
             # Try without cookies first, as they may not be available
-            base_cmd = self._get_yt_dlp_base_cmd(user_credentials, platform)
-            cmd = base_cmd + ['--dump-json', url]
-            logger.info(f"Getting {platform} info with command: {' '.join(cmd)}")
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
+            result = self._run_yt_dlp_with_cookie_fallback(
+                url,
+                user_credentials,
+                platform,
+                extra_args=['--dump-json']
+            )
             
             logger.info(f"yt-dlp return code: {result.returncode}")
             logger.info(f"yt-dlp stdout length: {len(result.stdout)}")
@@ -838,17 +832,54 @@ class InvidiousDownloader:
             logger.error(f"Error parsing Invidious response: {e}")
             return self._get_fallback_info(video_id, user_credentials=user_credentials)
     
+    def _run_yt_dlp_with_cookie_fallback(self, url, user_credentials, platform, extra_args=[]):
+        """
+        Run yt-dlp with a fallback mechanism for browser cookies.
+        Tries OAuth, then a list of browsers, then no cookies.
+        """
+        import subprocess
+
+        # Priority 1: Try with OAuth if available
+        if platform == 'youtube' and user_credentials and user_credentials.token:
+            base_cmd = self._get_yt_dlp_base_cmd(user_credentials, platform)
+            cmd = base_cmd + extra_args + [url]
+            logger.info("Attempting yt-dlp execution with OAuth token.")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            if result.returncode == 0 and result.stdout:
+                return result
+
+        # Priority 2: Try with browser cookies on local dev
+        if os.getenv('RENDER') != 'true':
+            browsers_to_try = ['chrome', 'firefox', 'edge', 'brave', 'vivaldi', 'chromium']
+            for browser in browsers_to_try:
+                base_cmd = self._get_yt_dlp_base_cmd(user_credentials, platform, browser_for_cookies=browser)
+                cmd = base_cmd + extra_args + [url]
+                logger.info(f"Attempting yt-dlp execution with cookies from '{browser}'.")
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                if result.returncode == 0 and result.stdout:
+                    logger.info(f"Successfully executed with cookies from '{browser}'.")
+                    return result
+                else:
+                    logger.warning(f"Failed with cookies from '{browser}': {result.stderr.strip()}")
+        
+        # Priority 3: Final attempt without any cookies
+        base_cmd = self._get_yt_dlp_base_cmd(user_credentials, platform, browser_for_cookies=None)
+        cmd = base_cmd + extra_args + [url]
+        logger.info("Attempting yt-dlp execution without browser cookies as a final fallback.")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        return result
+
     def _get_fallback_info(self, video_id, user_credentials=None):
         """
         Final fallback using yt-dlp. This should return a failure if it cannot get real info.
         """
         try:
-            import subprocess
-            import json
-
-            base_cmd = self._get_yt_dlp_base_cmd(user_credentials, platform='youtube')
-            cmd = base_cmd + ['--dump-json', f'https://www.youtube.com/watch?v={video_id}']
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            result = self._run_yt_dlp_with_cookie_fallback(
+                f'https://www.youtube.com/watch?v={video_id}',
+                user_credentials,
+                'youtube',
+                extra_args=['--dump-json']
+            )
 
             if result.returncode == 0 and result.stdout:
                 try:
@@ -1001,9 +1032,12 @@ class InvidiousDownloader:
             import subprocess
             import json
             
-            base_cmd = self._get_yt_dlp_base_cmd(user_credentials, platform=self.detect_platform(url))
-            cmd = base_cmd + ['--dump-json', url]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+            result = self._run_yt_dlp_with_cookie_fallback(
+                url,
+                user_credentials,
+                self.detect_platform(url),
+                extra_args=['--dump-json']
+            )
             
             if result.returncode != 0:
                 logger.warning("Failed to get formats from yt-dlp, using defaults")
@@ -1941,6 +1975,25 @@ def download_media():
             'error': f'Server error: {str(e)}'
         }), 500
 
+class FileRemover:
+    def __init__(self, path):
+        self.path = path
+        self.f = open(path, 'rb')
+
+    def __iter__(self):
+        return self.f.__iter__()
+
+    def read(self, *args):
+        return self.f.read(*args)
+
+    def close(self):
+        self.f.close()
+        try:
+            os.remove(self.path)
+            logger.info(f"Successfully cleaned up file: {self.path}")
+        except OSError as e:
+            logger.error(f"Error during file cleanup: {e}")
+
 @app.route('/api/file/<filename>', methods=['GET'])
 def serve_file(filename):
     """Serve downloaded file and delete it afterwards."""
@@ -1948,34 +2001,20 @@ def serve_file(filename):
         filepath = os.path.join(DOWNLOAD_DIR, filename)
         
         if not os.path.exists(filepath):
-            return jsonify({
-                'success': False,
-                'error': 'File not found'
-            }), 404
-        
-        @after_this_request
-        def cleanup(response):
-            try:
-                logger.info(f"Cleaning up file: {filepath}")
-                os.remove(filepath)
-            except Exception as e:
-                logger.error(f"Error during file cleanup: {str(e)}")
-            return response
+            logger.error(f"File not found at path: {filepath}")
+            return jsonify({'success': False, 'error': 'File not found'}), 404
 
-        logger.info(f"Serving file: {filename}")
+        file_remover = FileRemover(filepath)
         
         return send_file(
-            filepath,
+            file_remover,
             as_attachment=True,
             download_name=filename
         )
     
     except Exception as e:
-        logger.error(f"Error serving file: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': f'Server error: {str(e)}'
-        }), 500
+        logger.error(f"Error serving file: {str(e)}", exc_info=True)
+        return jsonify({'success': False, 'error': f'Server error: {str(e)}'}), 500
 
 @app.route('/api/platforms', methods=['GET'])
 def get_platforms():

@@ -41,4 +41,10 @@ REM Run main launcher
 echo 🚀 Starting JayDL...
 python main.py
 
-pause
+echo.
+echo ⏳ Waiting for server to start...
+timeout /t 5 /nobreak > nul
+
+echo 🌐 Opening browser at http://localhost:8000
+start http://localhost:8000
+

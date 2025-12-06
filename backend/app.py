@@ -1257,34 +1257,46 @@ class InvidiousDownloader:
     
     def _download_with_yt_dlp(self, url, quality, media_type, platform, user_credentials=None, direct_format_url=None):
         """Download using yt-dlp, routing unauthenticated YouTube through Invidious."""
+        download_url = direct_format_url or url
+        effective_platform = platform
+
+        # If this is an unauthenticated YouTube download, route it through an Invidious instance
+        # to prevent blocks and format availability issues from YouTube on server IPs.
+        if platform == 'youtube' and not user_credentials and not direct_format_url:
+            video_id = self._extract_video_id(url)
+            if video_id:
+                for instance_url in self.invidious_instances:
+                    invidious_url = f"{instance_url}/watch?v={video_id}"
+                    logger.info(f"Unauthenticated YouTube download. Routing through Invidious instance: {instance_url}")
+                    
+                    result = self._execute_yt_dlp_download(invidious_url, quality, media_type, 'generic', user_credentials)
+                    
+                    if result.get('success'):
+                        return result
+                    else:
+                        logger.warning(f"Download via Invidious instance {instance_url} failed. Trying next...")
+                
+                # If all instances fail
+                return {'success': False, 'error': 'All Invidious instances failed to download the video.'}
+
+        # For all other cases, proceed with the original download logic
+        return self._execute_yt_dlp_download(download_url, quality, media_type, effective_platform, user_credentials)
+
+    def _execute_yt_dlp_download(self, download_url, quality, media_type, platform, user_credentials):
+        """Helper function to execute a single yt-dlp download command."""
         import tempfile
         import subprocess
 
         filepath_info_file = None
         try:
-            download_url = direct_format_url or url
-            effective_platform = platform
-
-            # If this is an unauthenticated YouTube download, route it through an Invidious instance
-            # to prevent blocks and format availability issues from YouTube on server IPs.
-            if platform == 'youtube' and not user_credentials and not direct_format_url:
-                video_id = self._extract_video_id(url)
-                if video_id:
-                    instance_url = "https://vid.puffyan.us" # A historically reliable instance
-                    invidious_url = f"{instance_url}/watch?v={video_id}"
-                    logger.info(f"Unauthenticated YouTube download. Routing through Invidious instance: {instance_url}")
-                    download_url = invidious_url
-                    # Use the generic extractor for Invidious URLs to prevent yt-dlp resolving it back to YouTube.
-                    effective_platform = 'generic'
-
             # Create a temp file to store the final filename from yt-dlp
             with tempfile.NamedTemporaryFile(mode='w', delete=False, encoding='utf-8', suffix='.txt') as tmp_file:
                 filepath_info_file = tmp_file.name
 
-            logger.info(f"Downloading with yt-dlp (platform={effective_platform}, quality={quality}, type={media_type})")
+            logger.info(f"Downloading with yt-dlp (platform={platform}, quality={quality}, type={media_type})")
             
-            # Build command using the 'effective_platform' which may be 'generic' for Invidious routes
-            base_cmd = self._get_yt_dlp_base_cmd(user_credentials, effective_platform)
+            # Build command using the 'platform' which may be 'generic' for Invidious routes
+            base_cmd = self._get_yt_dlp_base_cmd(user_credentials, platform)
             
             cmd = []
             if media_type == 'audio':
@@ -1296,7 +1308,7 @@ class InvidiousDownloader:
                     '--audio-quality', '192',
                     '-o', output_template,
                 ]
-                logger.info(f"Downloading audio from {effective_platform}")
+                logger.info(f"Downloading audio from {platform}")
             else:
                 quality_map = {
                     '2160': 'bv[height<=2160]+ba/b[height<=2160]/bv+ba/b',
@@ -1316,7 +1328,7 @@ class InvidiousDownloader:
                     '-f', format_spec,
                     '-o', output_template,
                 ]
-                logger.info(f"Downloading video {quality} from {effective_platform}")
+                logger.info(f"Downloading video {quality} from {platform}")
             
             # Add the --print-to-file argument to get the final path and the URL to download
             cmd.extend(['--print-to-file', 'after_move:filepath', filepath_info_file])
@@ -1345,7 +1357,7 @@ class InvidiousDownloader:
             # Ensure the temp file is always cleaned up
             if filepath_info_file and os.path.exists(filepath_info_file):
                 os.remove(filepath_info_file)
-    
+
     def _process_download_result(self, result, platform, media_type, quality, filepath_info_file):
         """Process successful download result by reading the path from the info file."""
         try:

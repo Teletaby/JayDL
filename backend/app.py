@@ -1548,9 +1548,11 @@ def is_authenticated():
     # Check for personal credentials first
     if 'credentials' in session:
         return True
-    # Fall back to shared account
-    shared_creds = load_shared_credentials()
-    return shared_creds is not None
+    # Fall back to shared account only in local development
+    if os.getenv('RENDER') != 'true':
+        shared_creds = load_shared_credentials()
+        return shared_creds is not None
+    return False
 
 def get_user_credentials():
     """Get user credentials from session or shared account"""
@@ -1559,13 +1561,14 @@ def get_user_credentials():
         creds_dict = session['credentials']
         return google.oauth2.credentials.Credentials(**creds_dict)
     
-    # Fall back to shared account credentials
-    shared_creds = load_shared_credentials()
-    if shared_creds:
-        try:
-            return google.oauth2.credentials.Credentials(**shared_creds)
-        except Exception as e:
-            logger.warning(f"Failed to create credentials from shared account: {str(e)}")
+    # Fall back to shared account credentials only in local development
+    if os.getenv('RENDER') != 'true':
+        shared_creds = load_shared_credentials()
+        if shared_creds:
+            try:
+                return google.oauth2.credentials.Credentials(**shared_creds)
+            except Exception as e:
+                logger.warning(f"Failed to create credentials from shared account: {str(e)}")
     
     return None
 
